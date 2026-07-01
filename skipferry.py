@@ -34,6 +34,7 @@ import queue
 import time
 import datetime
 import traceback
+import configparser
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -446,6 +447,25 @@ def send_to_recycle_bin(path):
         _recycle_via_winapi(path)
     else:
         raise RuntimeError(t("err_need_send2trash"))
+
+
+# ---------------------------------------------------------------------------
+# 設定ファイル (ini) — 実行時に保存し、次回起動時に読み込む
+# ---------------------------------------------------------------------------
+# スクリプト (フリーズ時は実行ファイル) と同じフォルダに置くポータブル方式。
+CONFIG_FILENAME = "skipferry.ini"
+
+
+def _config_path():
+    """設定ファイル (skipferry.ini) の絶対パスを返す。"""
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        try:
+            base = os.path.dirname(os.path.abspath(__file__))
+        except NameError:
+            base = os.getcwd()
+    return os.path.join(base, CONFIG_FILENAME)
 
 
 # ---------------------------------------------------------------------------
@@ -899,9 +919,13 @@ class App(_BaseTk):
         self.msg_queue = queue.Queue()
         self.worker = None
 
+        self._loaded_ignore = None  # 起動時に ini から読んだ無視リスト (build 後に反映)
         self._init_vars()
+        self._load_settings()       # ini から各設定を復元 (CURRENT_LANG も含む)
         self._build_ui()
         self._setup_dnd()
+        self._apply_loaded_ignore()  # 無視リストは build 後に流し込む
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_queue)
 
     # ---- Tk 変数 (言語切替の再構築をまたいで保持する) ----
@@ -919,6 +943,111 @@ class App(_BaseTk):
         self.var_wait_ms = tk.IntVar(value=0)
         self.var_logfile = tk.BooleanVar(value=False)
         self.var_log_path = tk.StringVar()
+
+    # ---- 設定の永続化 (ini) ----
+    @staticmethod
+    def _var_int(var, default=0):
+        """IntVar/Spinbox が空・不正でも例外にせず int を返す。"""
+        try:
+            return max(0, int(var.get() or 0))
+        except Exception:
+            return default
+
+    def _load_settings(self):
+        """起動時に ini から設定を復元する。ファイルが無ければ何もしない。
+        言語 (CURRENT_LANG) はここで確定し、以降の UI 構築へ反映される。
+        無視リストはウィジェット未生成のため退避のみ (build 後に反映)。"""
+        global CURRENT_LANG
+        path = _config_path()
+        if not os.path.isfile(path):
+            return
+        cp = configparser.ConfigParser(interpolation=None)
+        try:
+            cp.read(path, encoding="utf-8")
+        except Exception:
+            return  # 壊れた ini でも既定値で起動する
+
+        def s(key, default=""):
+            return cp.get("General", key, fallback=default)
+
+        def b(key, default):
+            try:
+                return cp.getboolean("General", key)
+            except Exception:
+                return default
+
+        def i(key, default):
+            try:
+                return max(0, cp.getint("General", key))
+            except Exception:
+                return default
+
+        lang = s("lang", CURRENT_LANG)
+        if lang in dict(LANGUAGES):
+            CURRENT_LANG = lang
+            self.var_lang.set(lang)
+
+        self.var_src.set(s("source"))
+        self.var_dst.set(s("dest"))
+        self.var_subfolder.set(b("make_subfolder", True))
+        mode = s("mode", "copy")
+        self.var_mode.set(mode if mode in ("copy", "move") else "copy")
+        self.var_recycle.set(b("move_to_recycle", True))
+        verify = s("verify", "size_time")
+        self.var_verify.set(verify if verify in ("none", "size_time", "hash")
+                            else "size_time")
+        self.var_skip_error.set(b("skip_error", True))
+        self.var_auto_ignore.set(b("auto_ignore_on_error", True))
+        self.var_skip_n.set(i("skip_first_n", 0))
+        self.var_wait_ms.set(i("wait_ms", 0))
+        self.var_logfile.set(b("logfile", False))
+        self.var_log_path.set(s("log_path"))
+
+        # 無視リストは [Ignore] セクションにファイル出現順で格納 (build 後に流し込む)
+        if cp.has_section("Ignore"):
+            self._loaded_ignore = [val for _key, val in cp.items("Ignore")]
+
+    def _apply_loaded_ignore(self):
+        """_load_settings で退避した無視リストを Text ウィジェットへ反映する。"""
+        if not self._loaded_ignore:
+            return
+        self.txt_ignore.delete("1.0", "end")
+        self.txt_ignore.insert("1.0", "\n".join(self._loaded_ignore))
+        self._loaded_ignore = None
+
+    def _save_settings(self):
+        """現在の設定を ini へ保存する。保存失敗は動作を妨げない。"""
+        cp = configparser.ConfigParser(interpolation=None)
+        cp["General"] = {
+            "lang": CURRENT_LANG,
+            "source": self.var_src.get(),
+            "dest": self.var_dst.get(),
+            "make_subfolder": str(self.var_subfolder.get()),
+            "mode": self.var_mode.get(),
+            "move_to_recycle": str(self.var_recycle.get()),
+            "verify": self.var_verify.get(),
+            "skip_error": str(self.var_skip_error.get()),
+            "auto_ignore_on_error": str(self.var_auto_ignore.get()),
+            "skip_first_n": str(self._var_int(self.var_skip_n)),
+            "wait_ms": str(self._var_int(self.var_wait_ms)),
+            "logfile": str(self.var_logfile.get()),
+            "log_path": self.var_log_path.get(),
+        }
+        # 無視リストは末尾の空行を落として出現順に格納
+        lines = self._get_ignore_patterns()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        cp["Ignore"] = {str(idx): ln for idx, ln in enumerate(lines)}
+        try:
+            with open(_config_path(), "w", encoding="utf-8") as f:
+                cp.write(f)
+        except Exception:
+            pass  # 保存失敗は処理本体を止めない
+
+    def _on_close(self):
+        """終了時にも設定を保存してからウィンドウを閉じる。"""
+        self._save_settings()
+        self.destroy()
 
     # ---- 言語切替 ----
     def _on_lang_change(self):
@@ -1284,6 +1413,9 @@ class App(_BaseTk):
             return
         if not self._show_preview(cfg, plan):
             return
+
+        # 実行内容を確定したので、この設定を次回起動用に保存する
+        self._save_settings()
 
         self.txt_log.delete("1.0", "end")
         self.progress.config(value=0)

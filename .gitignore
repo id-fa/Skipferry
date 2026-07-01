@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Skipferry
+#   実行時に生成される個人設定ファイル (コミット対象外)
+skipferry.ini

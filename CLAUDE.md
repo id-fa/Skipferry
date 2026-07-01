@@ -62,6 +62,16 @@ python skipferry.py
   区切り行を出す。書き込み失敗は処理本体を止めない。GUI 側は `_resolve_log_file` で
   パスを決定（空欄ならコピー先の隣に `skipferry_log_<日時>.txt` を自動生成）。
   加えて現在のログ欄を任意保存する `_save_log`（実行不要でいつでも可）も持つ。
+- **設定の永続化 (ini)** — `_start` で実行確定時（プレビュー承認後）と、ウィンドウを閉じる時
+  （`_on_close` / `WM_DELETE_WINDOW`）に `_save_settings` が現在の設定を
+  `skipferry.ini` へ書き出す。次回起動時は `__init__` が `_load_settings` で復元する。
+  設定ファイルは**スクリプト（フリーズ時は実行ファイル）と同じフォルダ**（`_config_path`）。
+  `configparser`（`interpolation=None`）を使用し `[General]`（各スカラー設定）と `[Ignore]`
+  （無視リストを出現順に添字キーで格納。空行/コメント/`%` も保持）の 2 セクション構成。
+  **言語 (`CURRENT_LANG`) は UI 構築より前に確定させる必要がある**ため、`_load_settings` を
+  `_build_ui` の前に呼ぶ。無視リストはこの時点で Text 未生成のため `_loaded_ignore` に退避し、
+  build 後に `_apply_loaded_ignore` で流し込む。ini が無い/壊れている場合は既定値で起動する
+  （保存・読込の失敗はいずれも動作を妨げない）。
 - **設定内容の書き出し** — `_run` の冒頭で `_log_settings` がオプション設定
   （コピー元/先・サブフォルダ作成・動作/移動時の元処理・ベリファイ・エラースキップ・
   自動無視・先頭スキップ件数・ウェイト・無視パターン数・ログファイル）をログへ出力する。
