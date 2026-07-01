@@ -259,6 +259,7 @@ class CopyMoveWorker(threading.Thread):
         self.cfg = cfg
         self.q = msg_queue
         self.stop_flag = threading.Event()
+        self.pause_flag = threading.Event()  # set=一時停止中
         self.logf = None  # ログファイルのハンドル (任意)
 
     def log(self, text, level="info"):
@@ -277,6 +278,34 @@ class CopyMoveWorker(threading.Thread):
 
     def ignore_add(self, pattern):
         self.q.put(("ignore_add", pattern))
+
+    def _wait_if_paused(self):
+        """一時停止中は再開/停止まで待機する。停止時は速やかに抜ける。
+        戻り値: 停止要求が出ていれば True。"""
+        announced = False
+        while self.pause_flag.is_set() and not self.stop_flag.is_set():
+            if not announced:
+                self.log("一時停止中... （再開ボタンで続行）", "warn")
+                announced = True
+            time.sleep(0.1)
+        if announced and not self.stop_flag.is_set():
+            self.log("再開しました。", "info")
+        return self.stop_flag.is_set()
+
+    def _throttle_sleep(self):
+        """OSやアプリを重くしないためのウェイトを挟む。停止/一時停止に応答する。"""
+        ms = max(0, int(self.cfg.get("wait_ms", 0) or 0))
+        if ms <= 0:
+            return
+        remaining = ms / 1000.0
+        step = 0.1
+        while remaining > 0 and not self.stop_flag.is_set():
+            # ウェイト中に一時停止された場合はそちらで待機する
+            if self.pause_flag.is_set():
+                if self._wait_if_paused():
+                    return
+            time.sleep(min(step, remaining))
+            remaining -= step
 
     def run(self):
         # ログファイル出力が指定されていれば開く
@@ -343,6 +372,10 @@ class CopyMoveWorker(threading.Thread):
         dirs_with_残 = set()
 
         for rel, name in file_list:
+            # 一時停止中は待機 (停止要求が来たら抜ける)
+            if self._wait_if_paused():
+                self.log("ユーザーにより停止されました。", "warn")
+                break
             if self.stop_flag.is_set():
                 self.log("ユーザーにより停止されました。", "warn")
                 break
@@ -391,6 +424,9 @@ class CopyMoveWorker(threading.Thread):
                 if not cfg["skip_error"]:
                     self.log("エラースキップが無効のため中止します。", "error")
                     break
+
+            # OS/アプリを重くしないためのウェイト
+            self._throttle_sleep()
 
         # ---- フォルダのタイムスタンプ維持 (全ファイル処理後) ----
         self.log("フォルダのタイムスタンプを適用中...")
@@ -566,6 +602,16 @@ class App(_BaseTk):
                     width=10).grid(row=3, column=2, sticky="w", **pad)
         ttk.Label(frm_opt, text="(固まる破損ファイル回避用)").grid(row=3, column=3, sticky="w", **pad)
 
+        # ファイルごとのウェイト (OS/アプリ負荷軽減)
+        ttk.Label(frm_opt, text="ファイルごとのウェイト(ミリ秒):").grid(
+            row=4, column=0, columnspan=2, sticky="e", **pad)
+        self.var_wait_ms = tk.IntVar(value=0)
+        ttk.Spinbox(frm_opt, from_=0, to=60000, increment=10,
+                    textvariable=self.var_wait_ms, width=10).grid(
+            row=4, column=2, sticky="w", **pad)
+        ttk.Label(frm_opt, text="(0で無効 / OSが重くなる時に増やす)").grid(
+            row=4, column=3, sticky="w", **pad)
+
         # 無視リスト
         frm_ig = ttk.LabelFrame(self, text="無視リスト (ファイルマスク: *.tmp, thumbs.db, sub/*.log 等 / 1行1件)")
         frm_ig.pack(fill="both", expand=False, padx=8, pady=6)
@@ -601,6 +647,9 @@ class App(_BaseTk):
         frm_run.pack(fill="x", padx=8, pady=6)
         self.btn_run = ttk.Button(frm_run, text="実行", command=self._start)
         self.btn_run.pack(side="left", padx=4)
+        self.btn_pause = ttk.Button(frm_run, text="一時停止", command=self._toggle_pause,
+                                    state="disabled")
+        self.btn_pause.pack(side="left", padx=4)
         self.btn_stop = ttk.Button(frm_run, text="停止", command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=4)
         self.progress = ttk.Progressbar(frm_run, mode="determinate")
@@ -805,6 +854,7 @@ class App(_BaseTk):
             "skip_error": self.var_skip_error.get(),
             "auto_ignore_on_error": self.var_auto_ignore.get(),
             "skip_first_n": max(0, int(self.var_skip_n.get() or 0)),
+            "wait_ms": max(0, int(self.var_wait_ms.get() or 0)),
             "ignore_patterns": self._get_ignore_patterns(),
             "log_file": self._resolve_log_file(dst),
         }
@@ -822,6 +872,7 @@ class App(_BaseTk):
         self.lbl_prog.config(text="0 / 0")
         self.btn_run.config(state="disabled")
         self.btn_stop.config(state="normal")
+        self.btn_pause.config(state="normal", text="一時停止")
 
         self.worker = CopyMoveWorker(cfg, self.msg_queue)
         self.worker.start()
@@ -829,7 +880,20 @@ class App(_BaseTk):
     def _stop(self):
         if self.worker and self.worker.is_alive():
             self.worker.stop_flag.set()
+            self.worker.pause_flag.clear()  # 一時停止中でも停止できるよう解除
             self._log("warn", "停止要求を送信しました...")
+
+    def _toggle_pause(self):
+        if not (self.worker and self.worker.is_alive()):
+            return
+        if self.worker.pause_flag.is_set():
+            self.worker.pause_flag.clear()
+            self.btn_pause.config(text="一時停止")
+            self._log("info", "再開要求を送信しました...")
+        else:
+            self.worker.pause_flag.set()
+            self.btn_pause.config(text="再開")
+            self._log("warn", "一時停止要求を送信しました...")
 
     # ---- 実行前プレビュー ----
     def _show_preview(self, cfg, plan):
@@ -929,6 +993,7 @@ class App(_BaseTk):
                 elif kind == "done":
                     self.btn_run.config(state="normal")
                     self.btn_stop.config(state="disabled")
+                    self.btn_pause.config(state="disabled", text="一時停止")
         except queue.Empty:
             pass
         self.after(100, self._poll_queue)
