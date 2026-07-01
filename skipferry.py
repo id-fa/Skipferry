@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Skipferry - 破損ファイルを飛び越えるフォルダ コピー/移動ツール (Python / Tkinter)
+Skipferry - Folder copy/move tool that skips over corrupt files (Python / Tkinter)
 
 アプリやOSを巻き込んで固まるタイプの破損ファイルがあっても、処理順で先頭 N 件を
 スキップして健全なファイルだけを安全に運び切ることを主目的とする。
@@ -17,6 +18,7 @@ Skipferry - 破損ファイルを飛び越えるフォルダ コピー/移動ツ
   - エラーになったファイルを自動で無視リストへ登録
   - 無視リストのテキスト エクスポート/インポート
   - 処理順で先頭 N 件をスキップ (固まる破損ファイル対策)
+  - UI/ログの言語切替 (日本語 / English)
 
 移動 (元削除) 時の注意:
   対象ファイルがエラー/無視で元に残ったフォルダは、空にならないため削除されません。
@@ -45,6 +47,346 @@ except Exception:
     HAS_DND = False
     DND_FILES = None
     _BaseTk = tk.Tk
+
+
+# ---------------------------------------------------------------------------
+# 国際化 (i18n) — 日本語 / 英語
+# ---------------------------------------------------------------------------
+# 現在の言語。既定は日本語 (主対象が日本語Windowsのため)。
+CURRENT_LANG = "ja"
+
+# 対応言語 (コード, 表示名)。UI の言語切替に使用。
+LANGUAGES = [("ja", "日本語"), ("en", "English")]
+
+TRANSLATIONS = {
+    "ja": {
+        # ---- 全般 / ウィンドウ ----
+        "app_title": "Skipferry - 破損ファイルを飛び越えるフォルダ コピー/移動ツール",
+        "lang_label": "言語 / Language:",
+        # ---- フォルダ指定 ----
+        "frame_folders": "フォルダ指定",
+        "lbl_source": "コピー元:",
+        "lbl_dest": "コピー先:",
+        "btn_browse": "参照",
+        "chk_subfolder": "コピー先にコピー元フォルダ名のサブフォルダを作成する",
+        "dnd_on": "※ 各欄にフォルダをドラッグ&ドロップで設定できます",
+        "dnd_off": "※ ドラッグ&ドロップを使うには tkinterdnd2 が必要です "
+                   "(pip install tkinterdnd2)",
+        # ---- オプション ----
+        "frame_options": "オプション",
+        "lbl_action": "動作:",
+        "rb_copy": "コピー",
+        "rb_move": "移動",
+        "chk_recycle": "移動時: 削除せずコピー後に元をごみ箱へ (安全)",
+        "lbl_verify": "ベリファイ:",
+        "rb_verify_none": "なし",
+        "rb_verify_size": "サイズ+更新日時",
+        "rb_verify_hash": "SHA-256 ハッシュ",
+        "chk_skip_error": "エラースキップ (1件失敗しても続行)",
+        "chk_auto_ignore": "エラーファイルを自動で無視リストへ登録",
+        "lbl_skip_n": "処理順で先頭からスキップする件数:",
+        "lbl_skip_n_note": "(固まる破損ファイル回避用)",
+        "lbl_wait": "ファイルごとのウェイト(ミリ秒):",
+        "lbl_wait_note": "(0で無効 / OSが重くなる時に増やす)",
+        # ---- 無視リスト ----
+        "frame_ignore": "無視リスト (ファイルマスク: *.tmp, thumbs.db, sub/*.log 等 / 1行1件)",
+        "btn_import": "インポート",
+        "btn_export": "エクスポート",
+        "btn_clear": "クリア",
+        # ---- ログファイル出力 ----
+        "frame_logfile": "ログファイル出力",
+        "chk_logfile": "処理ログをファイルに出力する",
+        "lbl_logout": "出力先:",
+        "lbl_logout_note": "(空欄なら実行時にコピー先の隣へ自動生成)",
+        # ---- 実行 / 進捗 ----
+        "btn_run": "実行",
+        "btn_pause": "一時停止",
+        "btn_resume": "再開",
+        "btn_stop": "停止",
+        # ---- ログ ----
+        "frame_log": "ログ",
+        "btn_save_log": "ログを保存",
+        "btn_clear_log": "ログをクリア",
+        # ---- メッセージボックス タイトル ----
+        "title_info": "情報",
+        "title_error": "エラー",
+        "title_warn": "警告",
+        "title_input": "入力不足",
+        # ---- ダイアログ / メッセージ ----
+        "msg_need_src_dst": "コピー元/コピー先を指定してください。",
+        "msg_src_not_exist": "コピー元フォルダが存在しません。",
+        "msg_no_log_to_save": "保存するログがありません。",
+        "msg_log_saved": "ログを保存しました: {path}",
+        "msg_log_save_fail": "ログ保存失敗: {e}",
+        "msg_import_fail": "インポート失敗: {e}",
+        "msg_export_fail": "エクスポート失敗: {e}",
+        # ---- ファイルダイアログ ----
+        "fd_logfile_title": "ログファイルの出力先",
+        "fd_save_log_title": "ログを保存",
+        "ft_text": "テキスト",
+        "ft_all": "すべて",
+        # ---- ログ (GUI操作) ----
+        "log_import_ignore": "無視リストをインポート: {path}",
+        "log_export_ignore": "無視リストをエクスポート: {path}",
+        # ---- プレビュー ----
+        "pv_title": "処理内容のプレビュー",
+        "pv_del_recycle": "ごみ箱へ",
+        "pv_del_permanent": "完全削除",
+        "pv_mode_move": "移動（コピー後、元ファイルを{del_txt}）",
+        "pv_mode_copy": "コピー",
+        "pv_info": "動作: {mode}\nコピー元: {src}\nコピー先ルート: {dst}\n"
+                   "処理対象: {n} ファイル（無視 {ig} / 先頭スキップ {skip}）",
+        "pv_note_on": "サブフォルダ作成: ON → コピー先の直下に「元フォルダ名」の"
+                      "フォルダを作成し、その中へ展開します。",
+        "pv_note_off": "サブフォルダ作成: OFF → コピー先の直下へ中身を直接展開します"
+                       "（元フォルダ名のフォルダは作りません）。",
+        "pv_list_header": "処理先ファイル（先頭 {n} 件）:",
+        "pv_none": "（処理対象のファイルがありません）",
+        "pv_more": "... 他 {n} ファイル",
+        "pv_btn_run": "この内容で実行",
+        "pv_btn_cancel": "キャンセル",
+        # ---- 計画 / 検査エラー ----
+        "err_src_not_exist": "コピー元フォルダが存在しません: {src}",
+        "err_dst_inside_src": "コピー先がコピー元の内部/同一です。",
+        "err_ctrl_char": "コピー先パスに制御文字が含まれています（構成要素「{p}」/ {codes}）",
+        "err_invalid_char": "コピー先フォルダ名にWindowsで使用できない文字が含まれています："
+                            "{bad} （構成要素「{p}」）\n使用不可: < > : \" | ? *",
+        "err_trailing": "コピー先フォルダ名の末尾に空白またはドットは使用できません"
+                        "（構成要素「{p}」）",
+        "err_reserved": "コピー先フォルダ名にWindowsの予約名は使用できません（構成要素「{p}」）",
+        # ---- 設定内容の書き出し ----
+        "log_settings_header": "----- 設定内容 -----",
+        "val_on": "有効",
+        "val_off": "無効",
+        "set_source": "コピー元: {v}",
+        "set_dest": "コピー先: {v}",
+        "set_subfolder": "サブフォルダ作成: {v}",
+        "set_mode": "動作: {v}",
+        "set_recycle": "移動時の元ファイル: {v}",
+        "set_verify": "ベリファイ: {v}",
+        "set_skip_error": "エラースキップ: {v}",
+        "set_auto_ignore": "エラー時自動無視登録: {v}",
+        "set_skip_n": "先頭スキップ件数: {v}",
+        "set_wait": "ファイルごとのウェイト: {v} ミリ秒",
+        "set_ignore_count": "無視パターン数: {v}",
+        "set_logfile": "ログファイル: {v}",
+        # ---- ワーカー / 処理ログ ----
+        "log_building_list": "ファイル一覧を作成中...",
+        "log_abort": "{error} 中止します。",
+        "log_ignored": "[無視] {rel}",
+        "log_lead_skip": "[先頭スキップ] {rel}",
+        "log_target_count": "処理対象: {total} ファイル (無視 {ig} / 先頭スキップ {skip})",
+        "log_item": "[{done}/{total}] {rel}",
+        "log_item_ok": "  [完了] {rel}",
+        "err_verify_fail": "ベリファイ失敗: {detail}",
+        "log_error_item": "  [エラー] {rel}: {e}",
+        "log_auto_ignore": "  [自動無視登録] {pat}",
+        "log_skip_error_off": "エラースキップが無効のため中止します。",
+        "log_stopped": "ユーザーにより停止されました。",
+        "log_applying_dir_time": "フォルダのタイムスタンプを適用中...",
+        "log_removing_empty": "移動元の空フォルダを削除中...",
+        "log_done": "完了: 成功 {ok} / エラー {err} / 全 {total}",
+        "log_paused": "一時停止中... （再開ボタンで続行）",
+        "log_resumed": "再開しました。",
+        # ---- 検証詳細 ----
+        "vf_size_mismatch": "サイズ不一致 src={s} dst={d}",
+        "vf_time_mismatch": "更新日時不一致 src={s} dst={d}",
+        "vf_size_ok": "size_time ok",
+        "vf_hash_mismatch": "ハッシュ不一致\n    src={hs}\n    dst={hd}",
+        "vf_hash_ok": "hash ok",
+        # ---- フォルダ後処理 ----
+        "warn_dir_time_fail": "  [警告] フォルダ時刻設定失敗 {rel}: {e}",
+        "log_dir_removed": "  [元フォルダ削除] {rel}",
+        "warn_dir_residual": "  [残存] {rel} (ファイルが残っています)",
+        "warn_dir_remove_fail": "  [警告] フォルダ削除失敗 {rel}: {e}",
+        "warn_root_remove_fail": "  [警告] ルート削除失敗: {e}",
+        "log_root_placeholder": "(root)",
+        # ---- ログファイル ----
+        "logf_start": "===== Skipferry ログ開始 {stamp} =====",
+        "logf_end": "===== Skipferry ログ終了 =====",
+        "log_to_file": "ログをファイルへ出力: {path}",
+        "log_cant_open": "ログファイルを開けません: {e}",
+        "log_fatal": "致命的エラー:\n{tb}",
+        # ---- 実行制御 ----
+        "log_stop_requested": "停止要求を送信しました...",
+        "log_resume_requested": "再開要求を送信しました...",
+        "log_pause_requested": "一時停止要求を送信しました...",
+        # ---- ごみ箱 ----
+        "err_need_send2trash": "ごみ箱送りには send2trash が必要です (pip install Send2Trash)",
+    },
+    "en": {
+        # ---- General / window ----
+        "app_title": "Skipferry - Folder copy/move tool that skips over corrupt files",
+        "lang_label": "言語 / Language:",
+        # ---- Folders ----
+        "frame_folders": "Folders",
+        "lbl_source": "Source:",
+        "lbl_dest": "Destination:",
+        "btn_browse": "Browse",
+        "chk_subfolder": "Create a subfolder named after the source folder in the destination",
+        "dnd_on": "* You can drag & drop a folder onto each field",
+        "dnd_off": "* Drag & drop requires tkinterdnd2 (pip install tkinterdnd2)",
+        # ---- Options ----
+        "frame_options": "Options",
+        "lbl_action": "Action:",
+        "rb_copy": "Copy",
+        "rb_move": "Move",
+        "chk_recycle": "On move: send source to Recycle Bin after copy (safe)",
+        "lbl_verify": "Verify:",
+        "rb_verify_none": "None",
+        "rb_verify_size": "Size + mtime",
+        "rb_verify_hash": "SHA-256 hash",
+        "chk_skip_error": "Skip errors (continue on failure)",
+        "chk_auto_ignore": "Auto-add error files to the ignore list",
+        "lbl_skip_n": "Number of leading files to skip (in processing order):",
+        "lbl_skip_n_note": "(to avoid hang-inducing corrupt files)",
+        "lbl_wait": "Wait per file (ms):",
+        "lbl_wait_note": "(0 = off / increase if the OS slows down)",
+        # ---- Ignore list ----
+        "frame_ignore": "Ignore list (file masks: *.tmp, thumbs.db, sub/*.log, etc. / one per line)",
+        "btn_import": "Import",
+        "btn_export": "Export",
+        "btn_clear": "Clear",
+        # ---- Log file output ----
+        "frame_logfile": "Log file output",
+        "chk_logfile": "Write the processing log to a file",
+        "lbl_logout": "Output:",
+        "lbl_logout_note": "(if blank, auto-created next to the destination at run time)",
+        # ---- Run / progress ----
+        "btn_run": "Run",
+        "btn_pause": "Pause",
+        "btn_resume": "Resume",
+        "btn_stop": "Stop",
+        # ---- Log ----
+        "frame_log": "Log",
+        "btn_save_log": "Save log",
+        "btn_clear_log": "Clear log",
+        # ---- Message box titles ----
+        "title_info": "Information",
+        "title_error": "Error",
+        "title_warn": "Warning",
+        "title_input": "Missing input",
+        # ---- Dialogs / messages ----
+        "msg_need_src_dst": "Please specify both source and destination.",
+        "msg_src_not_exist": "The source folder does not exist.",
+        "msg_no_log_to_save": "There is no log to save.",
+        "msg_log_saved": "Log saved: {path}",
+        "msg_log_save_fail": "Failed to save log: {e}",
+        "msg_import_fail": "Import failed: {e}",
+        "msg_export_fail": "Export failed: {e}",
+        # ---- File dialogs ----
+        "fd_logfile_title": "Log file output location",
+        "fd_save_log_title": "Save log",
+        "ft_text": "Text",
+        "ft_all": "All files",
+        # ---- Log (GUI actions) ----
+        "log_import_ignore": "Imported ignore list: {path}",
+        "log_export_ignore": "Exported ignore list: {path}",
+        # ---- Preview ----
+        "pv_title": "Preview",
+        "pv_del_recycle": "send to Recycle Bin",
+        "pv_del_permanent": "permanently delete",
+        "pv_mode_move": "Move (after copy, {del_txt} the source)",
+        "pv_mode_copy": "Copy",
+        "pv_info": "Action: {mode}\nSource: {src}\nDestination root: {dst}\n"
+                   "To process: {n} files (ignored {ig} / leading-skipped {skip})",
+        "pv_note_on": "Create subfolder: ON -> creates a folder named after the source "
+                      "under the destination and expands into it.",
+        "pv_note_off": "Create subfolder: OFF -> expands the contents directly under the "
+                       "destination (no source-named folder is created).",
+        "pv_list_header": "Destination files (first {n}):",
+        "pv_none": "(no files to process)",
+        "pv_more": "... and {n} more files",
+        "pv_btn_run": "Run with these settings",
+        "pv_btn_cancel": "Cancel",
+        # ---- Plan / validation errors ----
+        "err_src_not_exist": "Source folder does not exist: {src}",
+        "err_dst_inside_src": "The destination is inside or the same as the source.",
+        "err_ctrl_char": "The destination path contains control characters "
+                         "(component \"{p}\" / {codes})",
+        "err_invalid_char": "The destination folder name contains characters not allowed on "
+                            "Windows: {bad} (component \"{p}\")\nNot allowed: < > : \" | ? *",
+        "err_trailing": "The destination folder name must not end with a space or a dot "
+                        "(component \"{p}\")",
+        "err_reserved": "The destination folder name must not be a Windows reserved name "
+                        "(component \"{p}\")",
+        # ---- Settings dump ----
+        "log_settings_header": "----- Settings -----",
+        "val_on": "on",
+        "val_off": "off",
+        "set_source": "Source: {v}",
+        "set_dest": "Destination: {v}",
+        "set_subfolder": "Create subfolder: {v}",
+        "set_mode": "Action: {v}",
+        "set_recycle": "Source after move: {v}",
+        "set_verify": "Verify: {v}",
+        "set_skip_error": "Skip errors: {v}",
+        "set_auto_ignore": "Auto-ignore on error: {v}",
+        "set_skip_n": "Leading skip count: {v}",
+        "set_wait": "Wait per file: {v} ms",
+        "set_ignore_count": "Ignore patterns: {v}",
+        "set_logfile": "Log file: {v}",
+        # ---- Worker / processing log ----
+        "log_building_list": "Building file list...",
+        "log_abort": "{error} Aborting.",
+        "log_ignored": "[ignored] {rel}",
+        "log_lead_skip": "[leading-skip] {rel}",
+        "log_target_count": "To process: {total} files (ignored {ig} / leading-skipped {skip})",
+        "log_item": "[{done}/{total}] {rel}",
+        "log_item_ok": "  [done] {rel}",
+        "err_verify_fail": "Verification failed: {detail}",
+        "log_error_item": "  [error] {rel}: {e}",
+        "log_auto_ignore": "  [auto-ignored] {pat}",
+        "log_skip_error_off": "Error-skip is off, so aborting.",
+        "log_stopped": "Stopped by the user.",
+        "log_applying_dir_time": "Applying folder timestamps...",
+        "log_removing_empty": "Removing empty source folders...",
+        "log_done": "Done: OK {ok} / errors {err} / total {total}",
+        "log_paused": "Paused... (press Resume to continue)",
+        "log_resumed": "Resumed.",
+        # ---- Verify details ----
+        "vf_size_mismatch": "size mismatch src={s} dst={d}",
+        "vf_time_mismatch": "mtime mismatch src={s} dst={d}",
+        "vf_size_ok": "size_time ok",
+        "vf_hash_mismatch": "hash mismatch\n    src={hs}\n    dst={hd}",
+        "vf_hash_ok": "hash ok",
+        # ---- Folder post-processing ----
+        "warn_dir_time_fail": "  [warn] failed to set folder time {rel}: {e}",
+        "log_dir_removed": "  [source folder removed] {rel}",
+        "warn_dir_residual": "  [residual] {rel} (files remain)",
+        "warn_dir_remove_fail": "  [warn] failed to remove folder {rel}: {e}",
+        "warn_root_remove_fail": "  [warn] failed to remove root: {e}",
+        "log_root_placeholder": "(root)",
+        # ---- Log file ----
+        "logf_start": "===== Skipferry log start {stamp} =====",
+        "logf_end": "===== Skipferry log end =====",
+        "log_to_file": "Writing log to file: {path}",
+        "log_cant_open": "Cannot open log file: {e}",
+        "log_fatal": "Fatal error:\n{tb}",
+        # ---- Run control ----
+        "log_stop_requested": "Stop request sent...",
+        "log_resume_requested": "Resume request sent...",
+        "log_pause_requested": "Pause request sent...",
+        # ---- Recycle bin ----
+        "err_need_send2trash": "Sending to the Recycle Bin requires send2trash "
+                               "(pip install Send2Trash)",
+    },
+}
+
+
+def t(key, lang=None, **kwargs):
+    """翻訳文字列を返す。lang 未指定なら現在の言語。欠落キーは日本語→キーの順でフォールバック。"""
+    lang = lang or CURRENT_LANG
+    table = TRANSLATIONS.get(lang, TRANSLATIONS["ja"])
+    s = table.get(key)
+    if s is None:
+        s = TRANSLATIONS["ja"].get(key, key)
+    if kwargs:
+        try:
+            s = s.format(**kwargs)
+        except Exception:
+            pass
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +445,7 @@ def send_to_recycle_bin(path):
     if sys.platform.startswith("win"):
         _recycle_via_winapi(path)
     else:
-        raise RuntimeError(
-            "ごみ箱送りには send2trash が必要です (pip install Send2Trash)"
-        )
+        raise RuntimeError(t("err_need_send2trash"))
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +485,7 @@ _WIN_RESERVED = {"CON", "PRN", "AUX", "NUL"} \
     | {f"LPT{i}" for i in range(1, 10)}
 
 
-def check_dest_path_valid(dst_root):
+def check_dest_path_valid(dst_root, lang=None):
     """コピー先パスにOS(主にWindows)でファイルパスとして扱えない文字/名前が
     含まれていないか検査する。問題があればエラー文字列、無ければ None を返す。
     ドライブレターの ':' やパス区切りは正当なので除外して各構成要素を見る。"""
@@ -159,19 +499,17 @@ def check_dest_path_valid(dst_root):
         ctrl = sorted({c for c in p if ord(c) < 32})
         if ctrl:
             codes = ", ".join(f"0x{ord(c):02X}" for c in ctrl)
-            return f"コピー先パスに制御文字が含まれています（構成要素「{p}」/ {codes}）"
+            return t("err_ctrl_char", lang=lang, p=p, codes=codes)
         if not win:
             continue
         bad = sorted({c for c in p if c in _WIN_INVALID_CHARS})
         if bad:
-            return ("コピー先フォルダ名にWindowsで使用できない文字が含まれています："
-                    f"{' '.join(bad)} （構成要素「{p}」）\n"
-                    '使用不可: < > : " | ? *')
+            return t("err_invalid_char", lang=lang, bad=" ".join(bad), p=p)
         if p != p.rstrip(" ."):
-            return f"コピー先フォルダ名の末尾に空白またはドットは使用できません（構成要素「{p}」）"
+            return t("err_trailing", lang=lang, p=p)
         stem = p.split(".")[0].upper()
         if stem in _WIN_RESERVED:
-            return f"コピー先フォルダ名にWindowsの予約名は使用できません（構成要素「{p}」）"
+            return t("err_reserved", lang=lang, p=p)
     return None
 
 
@@ -187,6 +525,7 @@ def plan_operation(cfg):
       skipped_list : 先頭スキップされた relpath 一覧
       skip_n       : 先頭スキップ件数
     """
+    lang = cfg.get("lang")
     src_root = os.path.abspath(cfg["source"])
     dst_base = os.path.abspath(cfg["dest"])
     plan = {"src_root": src_root, "dst_root": None, "error": None,
@@ -194,7 +533,7 @@ def plan_operation(cfg):
             "skipped_list": [], "skip_n": 0}
 
     if not os.path.isdir(src_root):
-        plan["error"] = f"コピー元フォルダが存在しません: {src_root}"
+        plan["error"] = t("err_src_not_exist", lang=lang, src=src_root)
         return plan
 
     if cfg["make_subfolder"]:
@@ -204,14 +543,14 @@ def plan_operation(cfg):
     plan["dst_root"] = dst_root
 
     # コピー先パスに使用不可文字/予約名が無いか検査
-    path_err = check_dest_path_valid(dst_root)
+    path_err = check_dest_path_valid(dst_root, lang=lang)
     if path_err:
         plan["error"] = path_err
         return plan
 
     if os.path.abspath(dst_root) == src_root or \
        os.path.abspath(dst_root).startswith(src_root + os.sep):
-        plan["error"] = "コピー先がコピー元の内部/同一です。"
+        plan["error"] = t("err_dst_inside_src", lang=lang)
         return plan
 
     # ファイル/フォルダ一覧 (決定論的にソート)
@@ -258,9 +597,14 @@ class CopyMoveWorker(threading.Thread):
         super().__init__(daemon=True)
         self.cfg = cfg
         self.q = msg_queue
+        self.lang = cfg.get("lang") or CURRENT_LANG  # 実行中の言語を固定
         self.stop_flag = threading.Event()
         self.pause_flag = threading.Event()  # set=一時停止中
         self.logf = None  # ログファイルのハンドル (任意)
+
+    def tr(self, key, **kwargs):
+        """開始時に固定した言語で翻訳する (実行中に切替えてもログはぶれない)。"""
+        return t(key, lang=self.lang, **kwargs)
 
     def log(self, text, level="info"):
         self.q.put(("log", (level, text)))
@@ -285,11 +629,11 @@ class CopyMoveWorker(threading.Thread):
         announced = False
         while self.pause_flag.is_set() and not self.stop_flag.is_set():
             if not announced:
-                self.log("一時停止中... （再開ボタンで続行）", "warn")
+                self.log(self.tr("log_paused"), "warn")
                 announced = True
             time.sleep(0.1)
         if announced and not self.stop_flag.is_set():
-            self.log("再開しました。", "info")
+            self.log(self.tr("log_resumed"), "info")
         return self.stop_flag.is_set()
 
     def _throttle_sleep(self):
@@ -314,34 +658,68 @@ class CopyMoveWorker(threading.Thread):
             try:
                 self.logf = open(log_path, "a", encoding="utf-8")
                 stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.logf.write(f"\n===== Skipferry ログ開始 {stamp} =====\n")
+                self.logf.write("\n" + self.tr("logf_start", stamp=stamp) + "\n")
                 self.logf.flush()
-                self.q.put(("log", ("info", f"ログをファイルへ出力: {log_path}")))
+                self.q.put(("log", ("info", self.tr("log_to_file", path=log_path))))
             except Exception as e:
                 self.logf = None
-                self.q.put(("log", ("error", f"ログファイルを開けません: {e}")))
+                self.q.put(("log", ("error", self.tr("log_cant_open", e=e))))
         try:
             self._run()
         except Exception:
-            self.log("致命的エラー:\n" + traceback.format_exc(), "error")
+            self.log(self.tr("log_fatal", tb=traceback.format_exc()), "error")
         finally:
             if self.logf is not None:
                 try:
-                    self.logf.write("===== Skipferry ログ終了 =====\n")
+                    self.logf.write(self.tr("logf_end") + "\n")
                     self.logf.close()
                 except Exception:
                     pass
                 self.logf = None
             self.q.put(("done", None))
 
+    def _log_settings(self):
+        """処理開始時にオプション設定内容をログへ書き出す。"""
+        cfg = self.cfg
+        on_off = lambda b: self.tr("val_on") if b else self.tr("val_off")
+        is_move = cfg["mode"] == "move"
+
+        self.log(self.tr("log_settings_header"))
+        self.log(self.tr("set_source", v=cfg["source"]))
+        self.log(self.tr("set_dest", v=cfg["dest"]))
+        self.log(self.tr("set_subfolder", v=on_off(cfg["make_subfolder"])))
+
+        mode_txt = self.tr("rb_move") if is_move else self.tr("rb_copy")
+        self.log(self.tr("set_mode", v=mode_txt))
+        if is_move:
+            recycle_txt = (self.tr("pv_del_recycle") if cfg["move_to_recycle"]
+                           else self.tr("pv_del_permanent"))
+            self.log(self.tr("set_recycle", v=recycle_txt))
+
+        verify_map = {"none": "rb_verify_none", "size_time": "rb_verify_size",
+                      "hash": "rb_verify_hash"}
+        self.log(self.tr("set_verify",
+                         v=self.tr(verify_map.get(cfg["verify"], "rb_verify_none"))))
+        self.log(self.tr("set_skip_error", v=on_off(cfg["skip_error"])))
+        self.log(self.tr("set_auto_ignore", v=on_off(cfg["auto_ignore_on_error"])))
+        self.log(self.tr("set_skip_n", v=max(0, int(cfg.get("skip_first_n", 0) or 0))))
+        self.log(self.tr("set_wait", v=max(0, int(cfg.get("wait_ms", 0) or 0))))
+        ig_count = len([p for p in cfg.get("ignore_patterns", [])
+                        if p.strip() and not p.strip().startswith("#")])
+        self.log(self.tr("set_ignore_count", v=ig_count))
+        self.log(self.tr("set_logfile", v=cfg.get("log_file") or self.tr("val_off")))
+
     def _run(self):
         cfg = self.cfg
 
+        # ---- 設定内容の書き出し ----
+        self._log_settings()
+
         # ---- 処理計画 (プレビューと共通) ----
-        self.log("ファイル一覧を作成中...")
+        self.log(self.tr("log_building_list"))
         plan = plan_operation(cfg)
         if plan["error"]:
-            self.log(plan["error"] + " 中止します。", "error")
+            self.log(self.tr("log_abort", error=plan["error"]), "error")
             return
 
         src_root = plan["src_root"]
@@ -351,13 +729,13 @@ class CopyMoveWorker(threading.Thread):
         is_move = cfg["mode"] == "move"
 
         for rel in plan["ignored_list"]:
-            self.log(f"[無視] {rel}")
+            self.log(self.tr("log_ignored", rel=rel))
         for rel in plan["skipped_list"]:
-            self.log(f"[先頭スキップ] {rel}")
+            self.log(self.tr("log_lead_skip", rel=rel))
 
         total = len(file_list)
-        self.log(f"処理対象: {total} ファイル "
-                 f"(無視 {len(plan['ignored_list'])} / 先頭スキップ {plan['skip_n']})")
+        self.log(self.tr("log_target_count", total=total,
+                         ig=len(plan["ignored_list"]), skip=plan["skip_n"]))
 
         # ---- フォルダ作成 ----
         os.makedirs(dst_root, exist_ok=True)
@@ -374,10 +752,10 @@ class CopyMoveWorker(threading.Thread):
         for rel, name in file_list:
             # 一時停止中は待機 (停止要求が来たら抜ける)
             if self._wait_if_paused():
-                self.log("ユーザーにより停止されました。", "warn")
+                self.log(self.tr("log_stopped"), "warn")
                 break
             if self.stop_flag.is_set():
-                self.log("ユーザーにより停止されました。", "warn")
+                self.log(self.tr("log_stopped"), "warn")
                 break
 
             done += 1
@@ -386,7 +764,7 @@ class CopyMoveWorker(threading.Thread):
             dst_file = os.path.join(dst_root, rel)
 
             try:
-                self.log(f"[{done}/{total}] {rel}")
+                self.log(self.tr("log_item", done=done, total=total, rel=rel))
                 os.makedirs(os.path.dirname(dst_file), exist_ok=True)
 
                 # コピー (メタデータ=タイムスタンプ維持)
@@ -396,7 +774,7 @@ class CopyMoveWorker(threading.Thread):
                 if cfg["verify"] != "none":
                     ok, detail = self._verify(src_file, dst_file, cfg["verify"])
                     if not ok:
-                        raise IOError(f"ベリファイ失敗: {detail}")
+                        raise IOError(self.tr("err_verify_fail", detail=detail))
 
                 # 移動時の元削除
                 if is_move:
@@ -406,30 +784,31 @@ class CopyMoveWorker(threading.Thread):
                         os.remove(src_file)
 
                 ok_count += 1
+                self.log(self.tr("log_item_ok", rel=rel))
 
             except Exception as e:
                 error_count += 1
-                self.log(f"  [エラー] {rel}: {e}", "error")
+                self.log(self.tr("log_error_item", rel=rel, e=e), "error")
 
                 # エラーファイルを自動で無視リストへ登録
                 if cfg["auto_ignore_on_error"]:
                     pat = rel.replace("\\", "/")
                     self.ignore_add(pat)
-                    self.log(f"  [自動無視登録] {pat}", "warn")
+                    self.log(self.tr("log_auto_ignore", pat=pat), "warn")
 
                 # 移動時、元が残るフォルダを記録 (親も含む)
                 if is_move:
                     self._mark_残(os.path.dirname(rel), dirs_with_残)
 
                 if not cfg["skip_error"]:
-                    self.log("エラースキップが無効のため中止します。", "error")
+                    self.log(self.tr("log_skip_error_off"), "error")
                     break
 
             # OS/アプリを重くしないためのウェイト
             self._throttle_sleep()
 
         # ---- フォルダのタイムスタンプ維持 (全ファイル処理後) ----
-        self.log("フォルダのタイムスタンプを適用中...")
+        self.log(self.tr("log_applying_dir_time"))
         for rel_dir in sorted(dir_list, reverse=True):
             self._apply_dir_time(src_root, dst_root, rel_dir)
         self._apply_dir_time(os.path.dirname(src_root), os.path.dirname(dst_root),
@@ -437,11 +816,11 @@ class CopyMoveWorker(threading.Thread):
 
         # ---- 移動時: 空になった元フォルダを削除 ----
         if is_move and not self.stop_flag.is_set():
-            self.log("移動元の空フォルダを削除中...")
+            self.log(self.tr("log_removing_empty"))
             self._cleanup_source_dirs(src_root, dirs_with_残)
 
         self.log(
-            f"完了: 成功 {ok_count} / エラー {error_count} / 全 {total}",
+            self.tr("log_done", ok=ok_count, err=error_count, total=total),
             "error" if error_count else "info",
         )
 
@@ -450,17 +829,17 @@ class CopyMoveWorker(threading.Thread):
         s = os.stat(src)
         d = os.stat(dst)
         if s.st_size != d.st_size:
-            return False, f"サイズ不一致 src={s.st_size} dst={d.st_size}"
+            return False, self.tr("vf_size_mismatch", s=s.st_size, d=d.st_size)
         if method == "size_time":
             if abs(s.st_mtime - d.st_mtime) > 2:  # FAT等の丸め許容
-                return False, f"更新日時不一致 src={s.st_mtime} dst={d.st_mtime}"
-            return True, "size_time ok"
+                return False, self.tr("vf_time_mismatch", s=s.st_mtime, d=d.st_mtime)
+            return True, self.tr("vf_size_ok")
         elif method == "hash":
             hs = sha256_of_file(src)
             hd = sha256_of_file(dst)
             if hs != hd:
-                return False, f"ハッシュ不一致\n    src={hs}\n    dst={hd}"
-            return True, "hash ok"
+                return False, self.tr("vf_hash_mismatch", hs=hs, hd=hd)
+            return True, self.tr("vf_hash_ok")
         return True, ""
 
     def _mark_残(self, rel_dir, dirs_set):
@@ -483,9 +862,10 @@ class CopyMoveWorker(threading.Thread):
                 st = os.stat(src_dir)
                 os.utime(dst_dir, (st.st_atime, st.st_mtime))
         except Exception as e:
-            self.log(f"  [警告] フォルダ時刻設定失敗 {rel_dir}: {e}", "warn")
+            self.log(self.tr("warn_dir_time_fail", rel=rel_dir, e=e), "warn")
 
     def _cleanup_source_dirs(self, src_root, dirs_with_残):
+        root_ph = self.tr("log_root_placeholder")
         # 深い方から空フォルダを削除
         for cur, dirs, files in os.walk(src_root, topdown=False):
             rel = os.path.relpath(cur, src_root).replace("\\", "/")
@@ -495,18 +875,18 @@ class CopyMoveWorker(threading.Thread):
                 if not os.listdir(cur):
                     if cur != src_root:
                         os.rmdir(cur)
-                        self.log(f"  [元フォルダ削除] {rel or '(root)'}")
+                        self.log(self.tr("log_dir_removed", rel=rel or root_ph))
                 else:
-                    self.log(f"  [残存] {rel or '(root)'} (ファイルが残っています)", "warn")
+                    self.log(self.tr("warn_dir_residual", rel=rel or root_ph), "warn")
             except Exception as e:
-                self.log(f"  [警告] フォルダ削除失敗 {rel}: {e}", "warn")
+                self.log(self.tr("warn_dir_remove_fail", rel=rel, e=e), "warn")
         # ルート自体
         try:
             if os.path.isdir(src_root) and not os.listdir(src_root):
                 os.rmdir(src_root)
-                self.log(f"  [元フォルダ削除] {src_root}")
+                self.log(self.tr("log_dir_removed", rel=src_root))
         except Exception as e:
-            self.log(f"  [警告] ルート削除失敗: {e}", "warn")
+            self.log(self.tr("warn_root_remove_fail", e=e), "warn")
 
 
 # ---------------------------------------------------------------------------
@@ -515,105 +895,142 @@ class CopyMoveWorker(threading.Thread):
 class App(_BaseTk):
     def __init__(self):
         super().__init__()
-        self.title("Skipferry - 破損ファイルを飛び越えるフォルダ コピー/移動ツール")
-        self.geometry("820x780")
+        self.geometry("820x820")
         self.msg_queue = queue.Queue()
         self.worker = None
 
+        self._init_vars()
         self._build_ui()
         self._setup_dnd()
         self.after(100, self._poll_queue)
 
-    # ---- UI 構築 ----
-    def _build_ui(self):
-        pad = {"padx": 6, "pady": 3}
-
-        # パス
-        frm_path = ttk.LabelFrame(self, text="フォルダ指定")
-        frm_path.pack(fill="x", padx=8, pady=6)
-
+    # ---- Tk 変数 (言語切替の再構築をまたいで保持する) ----
+    def _init_vars(self):
+        self.var_lang = tk.StringVar(value=CURRENT_LANG)
         self.var_src = tk.StringVar()
         self.var_dst = tk.StringVar()
+        self.var_subfolder = tk.BooleanVar(value=True)
+        self.var_mode = tk.StringVar(value="copy")
+        self.var_recycle = tk.BooleanVar(value=True)
+        self.var_verify = tk.StringVar(value="size_time")
+        self.var_skip_error = tk.BooleanVar(value=True)
+        self.var_auto_ignore = tk.BooleanVar(value=True)
+        self.var_skip_n = tk.IntVar(value=0)
+        self.var_wait_ms = tk.IntVar(value=0)
+        self.var_logfile = tk.BooleanVar(value=False)
+        self.var_log_path = tk.StringVar()
 
-        ttk.Label(frm_path, text="コピー元:").grid(row=0, column=0, sticky="e", **pad)
+    # ---- 言語切替 ----
+    def _on_lang_change(self):
+        global CURRENT_LANG
+        lang = self.var_lang.get()
+        if lang == CURRENT_LANG:
+            return
+        # 実行中は切替不可 (ワーカーの言語が固定されているため)
+        if self.worker and self.worker.is_alive():
+            self.var_lang.set(CURRENT_LANG)
+            return
+        # Text ウィジェットの内容を退避 (再構築で失われるため)
+        ignore_content = self.txt_ignore.get("1.0", "end").rstrip("\n")
+        log_content = self.txt_log.get("1.0", "end").rstrip("\n")
+
+        CURRENT_LANG = lang
+        for w in self.winfo_children():
+            w.destroy()
+        self._build_ui()
+        self._setup_dnd()
+
+        if ignore_content:
+            self.txt_ignore.insert("1.0", ignore_content)
+        if log_content:
+            self.txt_log.insert("1.0", log_content + "\n")
+            self.txt_log.see("end")
+
+    # ---- UI 構築 ----
+    def _build_ui(self):
+        self.title(t("app_title"))
+        pad = {"padx": 6, "pady": 3}
+
+        # 言語切替
+        frm_lang = ttk.Frame(self)
+        frm_lang.pack(fill="x", padx=8, pady=(6, 0))
+        ttk.Label(frm_lang, text=t("lang_label")).pack(side="left", padx=(0, 4))
+        for code, name in LANGUAGES:
+            ttk.Radiobutton(frm_lang, text=name, value=code,
+                            variable=self.var_lang,
+                            command=self._on_lang_change).pack(side="left", padx=2)
+
+        # パス
+        frm_path = ttk.LabelFrame(self, text=t("frame_folders"))
+        frm_path.pack(fill="x", padx=8, pady=6)
+
+        ttk.Label(frm_path, text=t("lbl_source")).grid(row=0, column=0, sticky="e", **pad)
         self.ent_src = ttk.Entry(frm_path, textvariable=self.var_src, width=70)
         self.ent_src.grid(row=0, column=1, **pad)
-        ttk.Button(frm_path, text="参照",
+        ttk.Button(frm_path, text=t("btn_browse"),
                    command=lambda: self._browse(self.var_src)).grid(row=0, column=2, **pad)
 
-        ttk.Label(frm_path, text="コピー先:").grid(row=1, column=0, sticky="e", **pad)
+        ttk.Label(frm_path, text=t("lbl_dest")).grid(row=1, column=0, sticky="e", **pad)
         self.ent_dst = ttk.Entry(frm_path, textvariable=self.var_dst, width=70)
         self.ent_dst.grid(row=1, column=1, **pad)
-        ttk.Button(frm_path, text="参照",
+        ttk.Button(frm_path, text=t("btn_browse"),
                    command=lambda: self._browse(self.var_dst)).grid(row=1, column=2, **pad)
 
-        self.var_subfolder = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frm_path, text="コピー先にコピー元フォルダ名のサブフォルダを作成する",
+        ttk.Checkbutton(frm_path, text=t("chk_subfolder"),
                         variable=self.var_subfolder).grid(row=2, column=1, sticky="w", **pad)
 
-        dnd_note = ("※ 各欄にフォルダをドラッグ&ドロップで設定できます"
-                    if HAS_DND else
-                    "※ ドラッグ&ドロップを使うには tkinterdnd2 が必要です "
-                    "(pip install tkinterdnd2)")
+        dnd_note = t("dnd_on") if HAS_DND else t("dnd_off")
         ttk.Label(frm_path, text=dnd_note, foreground="#666666").grid(
             row=3, column=1, sticky="w", **pad)
 
         # オプション
-        frm_opt = ttk.LabelFrame(self, text="オプション")
+        frm_opt = ttk.LabelFrame(self, text=t("frame_options"))
         frm_opt.pack(fill="x", padx=8, pady=6)
 
         # モード
-        self.var_mode = tk.StringVar(value="copy")
-        ttk.Label(frm_opt, text="動作:").grid(row=0, column=0, sticky="e", **pad)
-        ttk.Radiobutton(frm_opt, text="コピー", variable=self.var_mode,
+        ttk.Label(frm_opt, text=t("lbl_action")).grid(row=0, column=0, sticky="e", **pad)
+        ttk.Radiobutton(frm_opt, text=t("rb_copy"), variable=self.var_mode,
                         value="copy", command=self._sync_states).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Radiobutton(frm_opt, text="移動", variable=self.var_mode,
+        ttk.Radiobutton(frm_opt, text=t("rb_move"), variable=self.var_mode,
                         value="move", command=self._sync_states).grid(row=0, column=2, sticky="w", **pad)
 
-        self.var_recycle = tk.BooleanVar(value=True)
         self.chk_recycle = ttk.Checkbutton(
-            frm_opt, text="移動時: 削除せずコピー後に元をごみ箱へ (安全)",
-            variable=self.var_recycle)
+            frm_opt, text=t("chk_recycle"), variable=self.var_recycle)
         self.chk_recycle.grid(row=0, column=3, sticky="w", **pad)
 
         # 検証
-        self.var_verify = tk.StringVar(value="size_time")
-        ttk.Label(frm_opt, text="ベリファイ:").grid(row=1, column=0, sticky="e", **pad)
-        ttk.Radiobutton(frm_opt, text="なし", variable=self.var_verify,
+        ttk.Label(frm_opt, text=t("lbl_verify")).grid(row=1, column=0, sticky="e", **pad)
+        ttk.Radiobutton(frm_opt, text=t("rb_verify_none"), variable=self.var_verify,
                         value="none").grid(row=1, column=1, sticky="w", **pad)
-        ttk.Radiobutton(frm_opt, text="サイズ+更新日時", variable=self.var_verify,
+        ttk.Radiobutton(frm_opt, text=t("rb_verify_size"), variable=self.var_verify,
                         value="size_time").grid(row=1, column=2, sticky="w", **pad)
-        ttk.Radiobutton(frm_opt, text="SHA-256 ハッシュ", variable=self.var_verify,
+        ttk.Radiobutton(frm_opt, text=t("rb_verify_hash"), variable=self.var_verify,
                         value="hash").grid(row=1, column=3, sticky="w", **pad)
 
         # エラースキップ / 自動無視
-        self.var_skip_error = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frm_opt, text="エラースキップ (1件失敗しても続行)",
+        ttk.Checkbutton(frm_opt, text=t("chk_skip_error"),
                         variable=self.var_skip_error).grid(row=2, column=1, columnspan=2, sticky="w", **pad)
 
-        self.var_auto_ignore = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frm_opt, text="エラーファイルを自動で無視リストへ登録",
+        ttk.Checkbutton(frm_opt, text=t("chk_auto_ignore"),
                         variable=self.var_auto_ignore).grid(row=2, column=3, sticky="w", **pad)
 
         # 先頭スキップ
-        ttk.Label(frm_opt, text="処理順で先頭からスキップする件数:").grid(row=3, column=0, columnspan=2, sticky="e", **pad)
-        self.var_skip_n = tk.IntVar(value=0)
+        ttk.Label(frm_opt, text=t("lbl_skip_n")).grid(row=3, column=0, columnspan=2, sticky="e", **pad)
         ttk.Spinbox(frm_opt, from_=0, to=1000000, textvariable=self.var_skip_n,
                     width=10).grid(row=3, column=2, sticky="w", **pad)
-        ttk.Label(frm_opt, text="(固まる破損ファイル回避用)").grid(row=3, column=3, sticky="w", **pad)
+        ttk.Label(frm_opt, text=t("lbl_skip_n_note")).grid(row=3, column=3, sticky="w", **pad)
 
         # ファイルごとのウェイト (OS/アプリ負荷軽減)
-        ttk.Label(frm_opt, text="ファイルごとのウェイト(ミリ秒):").grid(
+        ttk.Label(frm_opt, text=t("lbl_wait")).grid(
             row=4, column=0, columnspan=2, sticky="e", **pad)
-        self.var_wait_ms = tk.IntVar(value=0)
         ttk.Spinbox(frm_opt, from_=0, to=60000, increment=10,
                     textvariable=self.var_wait_ms, width=10).grid(
             row=4, column=2, sticky="w", **pad)
-        ttk.Label(frm_opt, text="(0で無効 / OSが重くなる時に増やす)").grid(
+        ttk.Label(frm_opt, text=t("lbl_wait_note")).grid(
             row=4, column=3, sticky="w", **pad)
 
         # 無視リスト
-        frm_ig = ttk.LabelFrame(self, text="無視リスト (ファイルマスク: *.tmp, thumbs.db, sub/*.log 等 / 1行1件)")
+        frm_ig = ttk.LabelFrame(self, text=t("frame_ignore"))
         frm_ig.pack(fill="both", expand=False, padx=8, pady=6)
 
         self.txt_ignore = tk.Text(frm_ig, height=6, width=70)
@@ -624,33 +1041,32 @@ class App(_BaseTk):
 
         frm_ig_btn = ttk.Frame(frm_ig)
         frm_ig_btn.pack(side="left", fill="y", padx=6)
-        ttk.Button(frm_ig_btn, text="インポート", command=self._import_ignore).pack(fill="x", pady=2)
-        ttk.Button(frm_ig_btn, text="エクスポート", command=self._export_ignore).pack(fill="x", pady=2)
-        ttk.Button(frm_ig_btn, text="クリア", command=lambda: self.txt_ignore.delete("1.0", "end")).pack(fill="x", pady=2)
+        ttk.Button(frm_ig_btn, text=t("btn_import"), command=self._import_ignore).pack(fill="x", pady=2)
+        ttk.Button(frm_ig_btn, text=t("btn_export"), command=self._export_ignore).pack(fill="x", pady=2)
+        ttk.Button(frm_ig_btn, text=t("btn_clear"),
+                   command=lambda: self.txt_ignore.delete("1.0", "end")).pack(fill="x", pady=2)
 
         # ログファイル出力
-        frm_lf = ttk.LabelFrame(self, text="ログファイル出力")
+        frm_lf = ttk.LabelFrame(self, text=t("frame_logfile"))
         frm_lf.pack(fill="x", padx=8, pady=6)
-        self.var_logfile = tk.BooleanVar(value=False)
-        self.var_log_path = tk.StringVar()
-        ttk.Checkbutton(frm_lf, text="処理ログをファイルに出力する",
+        ttk.Checkbutton(frm_lf, text=t("chk_logfile"),
                         variable=self.var_logfile).grid(row=0, column=0, columnspan=3,
                                                         sticky="w", **pad)
-        ttk.Label(frm_lf, text="出力先:").grid(row=1, column=0, sticky="e", **pad)
+        ttk.Label(frm_lf, text=t("lbl_logout")).grid(row=1, column=0, sticky="e", **pad)
         ttk.Entry(frm_lf, textvariable=self.var_log_path, width=64).grid(row=1, column=1, **pad)
-        ttk.Button(frm_lf, text="参照", command=self._browse_logfile).grid(row=1, column=2, **pad)
-        ttk.Label(frm_lf, text="(空欄なら実行時にコピー先の隣へ自動生成)").grid(
+        ttk.Button(frm_lf, text=t("btn_browse"), command=self._browse_logfile).grid(row=1, column=2, **pad)
+        ttk.Label(frm_lf, text=t("lbl_logout_note")).grid(
             row=2, column=1, sticky="w", **pad)
 
         # 実行 / 進捗
         frm_run = ttk.Frame(self)
         frm_run.pack(fill="x", padx=8, pady=6)
-        self.btn_run = ttk.Button(frm_run, text="実行", command=self._start)
+        self.btn_run = ttk.Button(frm_run, text=t("btn_run"), command=self._start)
         self.btn_run.pack(side="left", padx=4)
-        self.btn_pause = ttk.Button(frm_run, text="一時停止", command=self._toggle_pause,
+        self.btn_pause = ttk.Button(frm_run, text=t("btn_pause"), command=self._toggle_pause,
                                     state="disabled")
         self.btn_pause.pack(side="left", padx=4)
-        self.btn_stop = ttk.Button(frm_run, text="停止", command=self._stop, state="disabled")
+        self.btn_stop = ttk.Button(frm_run, text=t("btn_stop"), command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=4)
         self.progress = ttk.Progressbar(frm_run, mode="determinate")
         self.progress.pack(side="left", fill="x", expand=True, padx=8)
@@ -658,13 +1074,13 @@ class App(_BaseTk):
         self.lbl_prog.pack(side="left", padx=4)
 
         # ログ
-        frm_log = ttk.LabelFrame(self, text="ログ")
+        frm_log = ttk.LabelFrame(self, text=t("frame_log"))
         frm_log.pack(fill="both", expand=True, padx=8, pady=6)
 
         frm_log_bar = ttk.Frame(frm_log)
         frm_log_bar.pack(fill="x", padx=6, pady=(4, 0))
-        ttk.Button(frm_log_bar, text="ログを保存", command=self._save_log).pack(side="left")
-        ttk.Button(frm_log_bar, text="ログをクリア",
+        ttk.Button(frm_log_bar, text=t("btn_save_log"), command=self._save_log).pack(side="left")
+        ttk.Button(frm_log_bar, text=t("btn_clear_log"),
                    command=lambda: self.txt_log.delete("1.0", "end")).pack(side="left", padx=4)
 
         frm_log_body = ttk.Frame(frm_log)
@@ -733,16 +1149,19 @@ class App(_BaseTk):
                 return None
             cur = parent
 
+    def _filetypes(self):
+        return [(t("ft_text"), "*.txt"), (t("ft_all"), "*.*")]
+
     def _browse_logfile(self):
         cur = self.var_log_path.get().strip()
         initial_dir = self._resolve_initialdir(
             os.path.dirname(cur) if cur else self.var_dst.get().strip())
         path = filedialog.asksaveasfilename(
-            title="ログファイルの出力先",
+            title=t("fd_logfile_title"),
             defaultextension=".txt",
             initialdir=initial_dir or None,
             initialfile=os.path.basename(cur) if cur else "skipferry_log.txt",
-            filetypes=[("テキスト", "*.txt"), ("すべて", "*.*")])
+            filetypes=self._filetypes())
         if path:
             self.var_log_path.set(os.path.normpath(path))
             self.var_logfile.set(True)
@@ -772,22 +1191,22 @@ class App(_BaseTk):
     def _save_log(self):
         content = self.txt_log.get("1.0", "end").rstrip("\n")
         if not content:
-            messagebox.showinfo("情報", "保存するログがありません。")
+            messagebox.showinfo(t("title_info"), t("msg_no_log_to_save"))
             return
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = filedialog.asksaveasfilename(
-            title="ログを保存",
+            title=t("fd_save_log_title"),
             defaultextension=".txt",
             initialfile=f"skipferry_log_{ts}.txt",
-            filetypes=[("テキスト", "*.txt"), ("すべて", "*.*")])
+            filetypes=self._filetypes())
         if not path:
             return
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content + "\n")
-            self._log("info", f"ログを保存しました: {path}")
+            self._log("info", t("msg_log_saved", path=path))
         except Exception as e:
-            messagebox.showerror("エラー", f"ログ保存失敗: {e}")
+            messagebox.showerror(t("title_error"), t("msg_log_save_fail", e=e))
 
     # ---- 無視リスト I/O ----
     def _get_ignore_patterns(self):
@@ -795,8 +1214,7 @@ class App(_BaseTk):
         return [ln for ln in text.splitlines()]
 
     def _import_ignore(self):
-        path = filedialog.askopenfilename(
-            filetypes=[("テキスト", "*.txt"), ("すべて", "*.*")])
+        path = filedialog.askopenfilename(filetypes=self._filetypes())
         if not path:
             return
         try:
@@ -805,23 +1223,22 @@ class App(_BaseTk):
             if self.txt_ignore.get("1.0", "end").strip():
                 content = "\n" + content
             self.txt_ignore.insert("end", content)
-            self._log("info", f"無視リストをインポート: {path}")
+            self._log("info", t("log_import_ignore", path=path))
         except Exception as e:
-            messagebox.showerror("エラー", f"インポート失敗: {e}")
+            messagebox.showerror(t("title_error"), t("msg_import_fail", e=e))
 
     def _export_ignore(self):
         path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("テキスト", "*.txt"), ("すべて", "*.*")])
+            defaultextension=".txt", filetypes=self._filetypes())
         if not path:
             return
         try:
             lines = [ln for ln in self._get_ignore_patterns() if ln.strip()]
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
-            self._log("info", f"無視リストをエクスポート: {path}")
+            self._log("info", t("log_export_ignore", path=path))
         except Exception as e:
-            messagebox.showerror("エラー", f"エクスポート失敗: {e}")
+            messagebox.showerror(t("title_error"), t("msg_export_fail", e=e))
 
     def _append_ignore_pattern(self, pattern):
         existing = set(p.strip() for p in self._get_ignore_patterns())
@@ -838,10 +1255,10 @@ class App(_BaseTk):
         src = self.var_src.get().strip()
         dst = self.var_dst.get().strip()
         if not src or not dst:
-            messagebox.showwarning("入力不足", "コピー元/コピー先を指定してください。")
+            messagebox.showwarning(t("title_input"), t("msg_need_src_dst"))
             return
         if not os.path.isdir(src):
-            messagebox.showerror("エラー", "コピー元フォルダが存在しません。")
+            messagebox.showerror(t("title_error"), t("msg_src_not_exist"))
             return
 
         cfg = {
@@ -857,12 +1274,13 @@ class App(_BaseTk):
             "wait_ms": max(0, int(self.var_wait_ms.get() or 0)),
             "ignore_patterns": self._get_ignore_patterns(),
             "log_file": self._resolve_log_file(dst),
+            "lang": CURRENT_LANG,
         }
 
         # 処理計画を作成してプレビューを表示 (実行前確認)
         plan = plan_operation(cfg)
         if plan["error"]:
-            messagebox.showerror("エラー", plan["error"])
+            messagebox.showerror(t("title_error"), plan["error"])
             return
         if not self._show_preview(cfg, plan):
             return
@@ -872,7 +1290,7 @@ class App(_BaseTk):
         self.lbl_prog.config(text="0 / 0")
         self.btn_run.config(state="disabled")
         self.btn_stop.config(state="normal")
-        self.btn_pause.config(state="normal", text="一時停止")
+        self.btn_pause.config(state="normal", text=t("btn_pause"))
 
         self.worker = CopyMoveWorker(cfg, self.msg_queue)
         self.worker.start()
@@ -881,19 +1299,19 @@ class App(_BaseTk):
         if self.worker and self.worker.is_alive():
             self.worker.stop_flag.set()
             self.worker.pause_flag.clear()  # 一時停止中でも停止できるよう解除
-            self._log("warn", "停止要求を送信しました...")
+            self._log("warn", t("log_stop_requested"))
 
     def _toggle_pause(self):
         if not (self.worker and self.worker.is_alive()):
             return
         if self.worker.pause_flag.is_set():
             self.worker.pause_flag.clear()
-            self.btn_pause.config(text="一時停止")
-            self._log("info", "再開要求を送信しました...")
+            self.btn_pause.config(text=t("btn_pause"))
+            self._log("info", t("log_resume_requested"))
         else:
             self.worker.pause_flag.set()
-            self.btn_pause.config(text="再開")
-            self._log("warn", "一時停止要求を送信しました...")
+            self.btn_pause.config(text=t("btn_resume"))
+            self._log("warn", t("log_pause_requested"))
 
     # ---- 実行前プレビュー ----
     def _show_preview(self, cfg, plan):
@@ -901,7 +1319,7 @@ class App(_BaseTk):
         戻り値: True=実行 / False=キャンセル"""
         PREVIEW_N = 10
         dlg = tk.Toplevel(self)
-        dlg.title("処理内容のプレビュー")
+        dlg.title(t("pv_title"))
         dlg.geometry("780x520")
         dlg.transient(self)
         dlg.grab_set()
@@ -909,32 +1327,21 @@ class App(_BaseTk):
 
         # 動作説明
         if cfg["mode"] == "move":
-            del_txt = "ごみ箱へ" if cfg["move_to_recycle"] else "完全削除"
-            mode_txt = f"移動（コピー後、元ファイルを{del_txt}）"
+            del_txt = t("pv_del_recycle") if cfg["move_to_recycle"] else t("pv_del_permanent")
+            mode_txt = t("pv_mode_move", del_txt=del_txt)
         else:
-            mode_txt = "コピー"
+            mode_txt = t("pv_mode_copy")
 
-        info = (
-            f"動作: {mode_txt}\n"
-            f"コピー元: {plan['src_root']}\n"
-            f"コピー先ルート: {plan['dst_root']}\n"
-            f"処理対象: {len(plan['file_list'])} ファイル"
-            f"（無視 {len(plan['ignored_list'])} / 先頭スキップ {plan['skip_n']}）"
-        )
+        info = t("pv_info", mode=mode_txt, src=plan["src_root"], dst=plan["dst_root"],
+                 n=len(plan["file_list"]), ig=len(plan["ignored_list"]), skip=plan["skip_n"])
         ttk.Label(dlg, text=info, justify="left").pack(anchor="w", padx=12, pady=(10, 4))
 
         # サブフォルダ作成オプションの効果を明示
-        if cfg["make_subfolder"]:
-            note = ("サブフォルダ作成: ON → コピー先の直下に「元フォルダ名」の"
-                    "フォルダを作成し、その中へ展開します。")
-        else:
-            note = ("サブフォルダ作成: OFF → コピー先の直下へ中身を直接展開します"
-                    "（元フォルダ名のフォルダは作りません）。")
+        note = t("pv_note_on") if cfg["make_subfolder"] else t("pv_note_off")
         ttk.Label(dlg, text=note, foreground="#0066cc",
                   wraplength=740, justify="left").pack(anchor="w", padx=12, pady=(0, 6))
 
-        ttk.Label(dlg, text=f"処理先ファイル（先頭 {PREVIEW_N} 件）:").pack(
-            anchor="w", padx=12)
+        ttk.Label(dlg, text=t("pv_list_header", n=PREVIEW_N)).pack(anchor="w", padx=12)
 
         frm = ttk.Frame(dlg)
         frm.pack(fill="both", expand=True, padx=12, pady=4)
@@ -946,13 +1353,13 @@ class App(_BaseTk):
 
         preview = plan["file_list"][:PREVIEW_N]
         if not preview:
-            txt.insert("end", "（処理対象のファイルがありません）\n")
+            txt.insert("end", t("pv_none") + "\n")
         for rel, _name in preview:
             dst_file = os.path.join(plan["dst_root"], rel)
             txt.insert("end", dst_file + "\n")
         remain = len(plan["file_list"]) - len(preview)
         if remain > 0:
-            txt.insert("end", f"... 他 {remain} ファイル\n")
+            txt.insert("end", t("pv_more", n=remain) + "\n")
         txt.config(state="disabled")
 
         btns = ttk.Frame(dlg)
@@ -965,9 +1372,9 @@ class App(_BaseTk):
         def do_cancel():
             dlg.destroy()
 
-        run_btn = ttk.Button(btns, text="この内容で実行", command=do_ok)
+        run_btn = ttk.Button(btns, text=t("pv_btn_run"), command=do_ok)
         run_btn.pack(side="right", padx=(8, 0))
-        ttk.Button(btns, text="キャンセル", command=do_cancel).pack(side="right")
+        ttk.Button(btns, text=t("pv_btn_cancel"), command=do_cancel).pack(side="right")
         if not preview:
             run_btn.config(state="disabled")
 
@@ -993,7 +1400,7 @@ class App(_BaseTk):
                 elif kind == "done":
                     self.btn_run.config(state="normal")
                     self.btn_stop.config(state="disabled")
-                    self.btn_pause.config(state="disabled", text="一時停止")
+                    self.btn_pause.config(state="disabled", text=t("btn_pause"))
         except queue.Empty:
             pass
         self.after(100, self._poll_queue)
