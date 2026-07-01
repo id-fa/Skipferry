@@ -178,9 +178,11 @@ TRANSLATIONS = {
         "log_lead_skip": "[先頭スキップ] {rel}",
         "log_target_count": "処理対象: {total} ファイル (無視 {ig} / 先頭スキップ {skip})",
         "log_item": "[{done}/{total}] {rel}",
-        "log_item_ok": "  [完了] {rel}",
+        "log_item_copied": " [コピー完了]",
+        "log_item_removed": " [元ファイル削除]",
+        "log_item_recycled": " [元ファイルをゴミ箱へ]",
         "err_verify_fail": "ベリファイ失敗: {detail}",
-        "log_error_item": "  [エラー] {rel}: {e}",
+        "log_item_err": " [エラー] {e}",
         "log_auto_ignore": "  [自動無視登録] {pat}",
         "log_skip_error_off": "エラースキップが無効のため中止します。",
         "log_stopped": "ユーザーにより停止されました。",
@@ -334,9 +336,11 @@ TRANSLATIONS = {
         "log_lead_skip": "[leading-skip] {rel}",
         "log_target_count": "To process: {total} files (ignored {ig} / leading-skipped {skip})",
         "log_item": "[{done}/{total}] {rel}",
-        "log_item_ok": "  [done] {rel}",
+        "log_item_copied": " [copied]",
+        "log_item_removed": " [source deleted]",
+        "log_item_recycled": " [source to Recycle Bin]",
         "err_verify_fail": "Verification failed: {detail}",
-        "log_error_item": "  [error] {rel}: {e}",
+        "log_item_err": " [error] {e}",
         "log_auto_ignore": "  [auto-ignored] {pat}",
         "log_skip_error_off": "Error-skip is off, so aborting.",
         "log_stopped": "Stopped by the user.",
@@ -626,13 +630,27 @@ class CopyMoveWorker(threading.Thread):
         """開始時に固定した言語で翻訳する (実行中に切替えてもログはぶれない)。"""
         return t(key, lang=self.lang, **kwargs)
 
-    def log(self, text, level="info"):
-        self.q.put(("log", (level, text)))
+    def log(self, text, level="info", newline=True):
+        """1行分のログを出す。newline=False で行を開いたままにし、
+        続けて log_append で同じ行の末尾へ追記できる (処理開始行→完了/エラー用)。"""
+        end = "\n" if newline else ""
+        self.q.put(("log", (level, text, end)))
         # ログファイルが有効なら時刻付きで書き出す
         if self.logf is not None:
             try:
                 ts = datetime.datetime.now().strftime("%H:%M:%S")
-                self.logf.write(f"[{ts}] {text}\n")
+                self.logf.write(f"[{ts}] {text}{end}")
+                self.logf.flush()
+            except Exception:
+                pass  # ファイル書き込み失敗は処理本体を止めない
+
+    def log_append(self, text, level="info", newline=True):
+        """log(newline=False) で開いた行の末尾へ追記する (時刻プレフィックス無し)。"""
+        end = "\n" if newline else ""
+        self.q.put(("log", (level, text, end)))
+        if self.logf is not None:
+            try:
+                self.logf.write(f"{text}{end}")
                 self.logf.flush()
             except Exception:
                 pass  # ファイル書き込み失敗は処理本体を止めない
@@ -680,10 +698,10 @@ class CopyMoveWorker(threading.Thread):
                 stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 self.logf.write("\n" + self.tr("logf_start", stamp=stamp) + "\n")
                 self.logf.flush()
-                self.q.put(("log", ("info", self.tr("log_to_file", path=log_path))))
+                self.q.put(("log", ("info", self.tr("log_to_file", path=log_path), "\n")))
             except Exception as e:
                 self.logf = None
-                self.q.put(("log", ("error", self.tr("log_cant_open", e=e))))
+                self.q.put(("log", ("error", self.tr("log_cant_open", e=e), "\n")))
         try:
             self._run()
         except Exception:
@@ -784,7 +802,10 @@ class CopyMoveWorker(threading.Thread):
             dst_file = os.path.join(dst_root, rel)
 
             try:
-                self.log(self.tr("log_item", done=done, total=total, rel=rel))
+                # 処理開始行は改行しない (完了/エラーを同じ行の末尾へ追記する)。
+                # 固まった場合もログ最終行が原因ファイルを指す (主目的)。
+                self.log(self.tr("log_item", done=done, total=total, rel=rel),
+                         newline=False)
                 os.makedirs(os.path.dirname(dst_file), exist_ok=True)
 
                 # コピー (メタデータ=タイムスタンプ維持)
@@ -796,19 +817,24 @@ class CopyMoveWorker(threading.Thread):
                     if not ok:
                         raise IOError(self.tr("err_verify_fail", detail=detail))
 
-                # 移動時の元削除
+                # コピー成功を同じ行へ追記。移動時は元削除を別記録として分ける。
                 if is_move:
+                    self.log_append(self.tr("log_item_copied"), newline=False)
                     if cfg["move_to_recycle"]:
                         send_to_recycle_bin(src_file)
+                        self.log_append(self.tr("log_item_recycled"))
                     else:
                         os.remove(src_file)
+                        self.log_append(self.tr("log_item_removed"))
+                else:
+                    self.log_append(self.tr("log_item_copied"))
 
                 ok_count += 1
-                self.log(self.tr("log_item_ok", rel=rel))
 
             except Exception as e:
                 error_count += 1
-                self.log(self.tr("log_error_item", rel=rel, e=e), "error")
+                # 開いている処理開始行の末尾へエラーを追記して行を閉じる
+                self.log_append(self.tr("log_item_err", e=e), "error")
 
                 # エラーファイルを自動で無視リストへ登録
                 if cfg["auto_ignore_on_error"]:
@@ -1521,8 +1547,8 @@ class App(_BaseTk):
             while True:
                 kind, payload = self.msg_queue.get_nowait()
                 if kind == "log":
-                    level, text = payload
-                    self._log(level, text)
+                    level, text, end = payload
+                    self._log(level, text, end)
                 elif kind == "progress":
                     done, total = payload
                     self.progress.config(maximum=max(total, 1), value=done)
@@ -1537,8 +1563,9 @@ class App(_BaseTk):
             pass
         self.after(100, self._poll_queue)
 
-    def _log(self, level, text):
-        self.txt_log.insert("end", text + "\n", level)
+    def _log(self, level, text, end="\n"):
+        # end="" のとき行を閉じずに追記できる (処理開始行→完了/エラーを同じ行へ)
+        self.txt_log.insert("end", text + end, level)
         self.txt_log.see("end")
 
 
