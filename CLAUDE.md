@@ -57,14 +57,18 @@ python skipferry.py
 - **ワーカー (`CopyMoveWorker`, threading.Thread)** — 実際のコピー/移動/検証/削除を実行。
   一覧作成は `plan_operation` に委譲。結果は `queue.Queue` へ
   `("log"|"progress"|"ignore_add"|"done", payload)` 形式で送る。
-- **リード タイムアウト (`read_timeout_s`, 子プロセス+kill)** — 読み取りで固まる破損ファイル
-  対策の主目的をより直接的に満たす機能。`cfg["read_timeout_s"]`（秒, 0=無効）が正の時のみ、
-  コピーをモジュール関数 `_copy_worker_main` を実行する**常駐子プロセス**（`multiprocessing`）へ
-  逃がし、指定秒内に戻らなければ**プロセスごと kill**して打ち切る（Python はスレッドを kill
-  できないが、プロセスは kill できるため）。子プロセスは hang して kill した時のみ再生成する
+- **リード タイムアウト (`read_timeout_s`, 子プロセス+kill, 無進捗検知)** — 読み取りで固まる
+  破損ファイル対策の主目的をより直接的に満たす機能。`cfg["read_timeout_s"]`（秒, 0=無効）が
+  正の時のみ、コピーをモジュール関数 `_copy_worker_main` を実行する**常駐子プロセス**
+  （`multiprocessing`）へ逃がす。判定は**総時間ではなく無進捗**で行う：**コピー先 dst の
+  サイズが指定秒間まったく増えなければ hang とみなして プロセスごと kill**する
+  （`_copy_with_timeout` が 0.1 秒刻みで `_safe_size(dst)` を監視し、サイズ変化があれば
+  タイマーをリセット）。これにより**大容量で時間がかかるだけの健全ファイルは誤って打ち切らない**。
+  Python はスレッドを kill できないがプロセスは kill できるため子プロセス方式にしている。
+  子プロセスは hang して kill した時のみ再生成する
   （`_ensure_copy_proc`/`_kill_copy_proc`/`_shutdown_copy_proc`）ので通常時のオーバーヘッドは
   起動1回のみ。0 の時は従来どおりスレッド内で `shutil.copy2` を直接呼ぶ（オーバーヘッド無し）。
-  待機は 0.1 秒刻みで停止要求に即応（`_copy_with_timeout`）。**タイムアウトは `TimeoutError`
+  待機は 0.1 秒刻みで停止要求にも即応。**タイムアウトは `TimeoutError`
   としてエラー扱い**にして既存の自動無視/エラースキップ経路へ載せる（破損ファイルとして次回
   自動スキップされる＝主目的に合致）。停止要求が待機中に来た場合は内部例外 `_Stopped` を送出し、
   本処理ループが行を閉じて中断する。タイムアウトで途中まで書かれた dst は `_remove_partial` で掃除。

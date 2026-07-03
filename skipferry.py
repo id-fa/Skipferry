@@ -92,7 +92,7 @@ TRANSLATIONS = {
         "lbl_wait": "ファイルごとのウェイト(ミリ秒):",
         "lbl_wait_note": "(0で無効 / OSが重くなる時に増やす)",
         "lbl_read_timeout": "リード タイムアウト(秒):",
-        "lbl_read_timeout_note": "(0で無効 / 固まる破損ファイルを指定秒で打ち切り)",
+        "lbl_read_timeout_note": "(0で無効 / 進捗が指定秒止まったら固まったと判断し打ち切り)",
         # ---- 無視リスト ----
         "frame_ignore": "無視リスト (ファイルマスク: *.tmp, thumbs.db, sub/*.log 等 / 1行1件)",
         "btn_import": "インポート",
@@ -188,7 +188,7 @@ TRANSLATIONS = {
         "log_item_removed": " [元ファイル削除]",
         "log_item_recycled": " [元ファイルをゴミ箱へ]",
         "err_verify_fail": "ベリファイ失敗: {detail}",
-        "err_read_timeout": "リード タイムアウト ({sec}秒) により打ち切り",
+        "err_read_timeout": "リード タイムアウト ({sec}秒 無進捗) により打ち切り",
         "log_item_err": " [エラー] {e}",
         "log_auto_ignore": "  [自動無視登録] {pat}",
         "log_skip_error_off": "エラースキップが無効のため中止します。",
@@ -264,7 +264,7 @@ TRANSLATIONS = {
         "lbl_wait": "Wait per file (ms):",
         "lbl_wait_note": "(0 = off / increase if the OS slows down)",
         "lbl_read_timeout": "Read timeout (sec):",
-        "lbl_read_timeout_note": "(0 = off / abort hang-inducing files after N sec)",
+        "lbl_read_timeout_note": "(0 = off / abort when no progress for N sec)",
         # ---- Ignore list ----
         "frame_ignore": "Ignore list (file masks: *.tmp, thumbs.db, sub/*.log, etc. / one per line)",
         "btn_import": "Import",
@@ -362,7 +362,7 @@ TRANSLATIONS = {
         "log_item_removed": " [source deleted]",
         "log_item_recycled": " [source to Recycle Bin]",
         "err_verify_fail": "Verification failed: {detail}",
-        "err_read_timeout": "Aborted by read timeout ({sec}s)",
+        "err_read_timeout": "Aborted by read timeout (no progress for {sec}s)",
         "log_item_err": " [error] {e}",
         "log_auto_ignore": "  [auto-ignored] {pat}",
         "log_skip_error_off": "Error-skip is off, so aborting.",
@@ -853,28 +853,45 @@ class CopyMoveWorker(threading.Thread):
         except Exception:
             pass  # 消せなくても処理本体は止めない
 
+    @staticmethod
+    def _safe_size(path):
+        """コピー先の現在サイズを返す。取得できなければ -1 (進捗判定用)。"""
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return -1
+
     def _copy_with_timeout(self, src, dst, timeout_s):
-        """子プロセスで copy2 を実行し、timeout_s 秒以内に終わらなければ
-        プロセスごと kill して TimeoutError を送出する。停止要求が来たら
-        _Stopped を送出する。停止/タイムアウトの応答性のため 0.1 秒刻みで待つ。"""
+        """子プロセスで copy2 を実行する。**無進捗ウォッチドッグ**方式:
+        コピー先 dst のサイズが timeout_s 秒間まったく増えなければ hang と
+        みなし、プロセスごと kill して TimeoutError を送出する。進捗が続く限り
+        (大容量で時間がかかっても) 打ち切らない。停止要求が来たら _Stopped を
+        送出する。停止/進捗確認の応答性のため 0.1 秒刻みで待つ。"""
         self._ensure_copy_proc()
         self._copy_in.put((src, dst))
-        steps = max(1, int(round(timeout_s / 0.1)))
-        for _ in range(steps):
+        last_size = -1
+        last_progress = time.monotonic()
+        while True:
             if self.stop_flag.is_set():
                 self._kill_copy_proc()
                 raise _Stopped()
             try:
                 ok, msg = self._copy_out.get(timeout=0.1)
             except queue.Empty:
+                # まだコピー中。dst サイズの増加で進捗を判定する。
+                size = self._safe_size(dst)
+                if size != last_size:
+                    last_size = size          # 進捗あり → タイマーをリセット
+                    last_progress = time.monotonic()
+                elif time.monotonic() - last_progress >= timeout_s:
+                    # timeout_s 秒間サイズが 1 バイトも増えていない = hang
+                    self._kill_copy_proc()
+                    self._remove_partial(dst)
+                    raise TimeoutError(self.tr("err_read_timeout", sec=timeout_s))
                 continue
             if ok:
                 return
             raise IOError(msg)  # 破損以外のコピー失敗 (通常のエラー扱い)
-        # 時間切れ: 子プロセスごと kill し、途中まで書かれた dst を掃除する
-        self._kill_copy_proc()
-        self._remove_partial(dst)
-        raise TimeoutError(self.tr("err_read_timeout", sec=timeout_s))
 
     def _ask_error_action(self, rel, err_text):
         """エラースキップ無効時、GUI にエラー確認ダイアログを依頼して応答を待つ。

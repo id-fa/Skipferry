@@ -15,7 +15,7 @@ The name is a blend of skip (skip over corrupt files) + ferry (carry the healthy
 Some corrupt files hang the whole process the moment they are read, so an ordinary copy tool freezes and never finishes. Skipferry is designed to get the healthy files across anyway:
 
 - **Skip the first N files** in processing order — when you know (or can narrow down) which file hangs, skip past it. Processing order is deterministic, so this is reproducible.
-- **Read timeout** — run each copy in a separate child process and, if it does not return within N seconds, kill the process and move on. (Python cannot kill a thread, but it can kill a process — so a truly OS-hanging read can still be abandoned.)
+- **Read timeout** — run each copy in a separate child process and watch the destination file's progress; if it stops growing for N seconds, kill the process and move on. Because it detects lack of progress (not total time), a large file that is simply slow to copy is never aborted. (Python cannot kill a thread, but it can kill a process — so a truly OS-hanging read can still be abandoned.)
 - **Per-file logging that never buffers** — each file's start line is written before the copy and left open, so if something freezes, the last log line points straight at the culprit.
 
 On top of that it offers recursive copy/move, timestamp preservation, verification, recycle-bin deletion, an ignore list, and more.
@@ -24,7 +24,7 @@ On top of that it offers recursive copy/move, timestamp preservation, verificati
 
 - **Copy or move** a folder to a destination (recursive, same-drive and cross-drive).
 - **Skip first N files** in processing order (core corrupt-file workaround).
-- **Read timeout** (seconds): abort files whose read hangs, via a killable child process. `0` = off.
+- **Read timeout** (seconds): abort a file when its copy makes no progress for N seconds (no-progress watchdog, via a killable child process). A slow-but-progressing large file is not aborted. `0` = off.
 - **On-error dialog** when error-skip is off: choose **Retry / Skip / Abort** per failing file.
 - **File timestamp preservation** (`shutil.copy2`); folder timestamps re-applied after all files are processed.
 - **Verification**: none / size + mtime / SHA-256 hash.
@@ -76,7 +76,7 @@ The app starts and works even without the optional packages above.
 | Preserve hidden/system attributes | Re-apply the source's hidden/system attributes to the copy (Windows). Off by default. |
 | Skip first N | Skip the first N files in processing order (corrupt-file workaround). |
 | Wait per file (ms) | Insert a delay after each file to reduce load. `0` = off. |
-| Read timeout (sec) | Abort files whose read hangs after N seconds, by killing the copy child process. `0` = off. |
+| Read timeout (sec) | Abort a file when its copy makes no progress (destination stops growing) for N seconds, by killing the copy child process. Slow-but-progressing large files are not aborted. `0` = off. |
 
 ### Ignore list
 
@@ -87,7 +87,7 @@ The app starts and works even without the optional packages above.
 ### Handling corrupt / hanging files
 
 - **If you know which file hangs**: use Skip first N to jump past it (processing order is deterministic).
-- **If you don't**: set a Read timeout so any file that stalls is killed and skipped after N seconds. Timed-out files are treated as errors, so with auto-ignore on they are recorded and skipped on the next run.
+- **If you don't**: set a Read timeout so any file whose copy makes no progress for N seconds is killed and skipped. (It watches the destination's growth, so a slow large file is not mistaken for a hang.) Timed-out files are treated as errors, so with auto-ignore on they are recorded and skipped on the next run.
 - The log writes each file's start line before copying and does not add a newline until the result is known, so a frozen run leaves the offending file as the last log line.
 
 ## Notes & limitations
@@ -120,7 +120,7 @@ MIT License — see [LICENSE](LICENSE).
 一部の破損ファイルは読み込んだ瞬間に処理全体を固まらせるため、通常のコピーツールでは途中で止まって最後まで終わりません。Skipferry はそれでも健全なファイルを運び切ることを目指します。
 
 - **処理順で先頭 N 件をスキップ** — 固まる原因ファイルが分かる（または絞り込める）なら、その手前まで飛ばせます。処理順は決定論的なので再現できます。
-- **リード タイムアウト** — 各コピーを別の子プロセスで実行し、指定秒以内に返らなければプロセスごと kill して次へ進みます。（Python はスレッドを kill できませんが、プロセスは kill できるため、OS ごと固まる読み取りも打ち切れます。）
+- **リード タイムアウト** — 各コピーを別の子プロセスで実行し、コピー先ファイルの進捗（サイズの増加）を監視します。指定秒間まったく増えなければ固まったとみなしてプロセスごと kill し、次へ進みます。総時間ではなく無進捗で判定するので、単に容量が大きくて時間がかかっているだけの健全ファイルは打ち切りません。（Python はスレッドを kill できませんが、プロセスは kill できるため、OS ごと固まる読み取りも打ち切れます。）
 - **バッファしない逐次ログ** — 各ファイルの開始行をコピー前に出して行を開いたままにするので、固まってもログ最終行が原因ファイルを指します。
 
 これに加え、再帰コピー/移動、タイムスタンプ維持、ベリファイ、ごみ箱送り、無視リストなどを備えます。
@@ -129,7 +129,7 @@ MIT License — see [LICENSE](LICENSE).
 
 - **コピー/移動**: フォルダを移動先へ（サブフォルダ含む・同一/別ドライブ対応）。
 - **先頭スキップ**: 処理順で先頭 N 件を飛ばす（破損ファイル対策の中核）。
-- **リード タイムアウト（秒）**: 読み取りが固まるファイルを、kill 可能な子プロセスで打ち切り。`0` で無効。
+- **リード タイムアウト（秒）**: コピーの進捗が指定秒止まったら（コピー先が増えなくなったら）固まったとみなし、kill 可能な子プロセスで打ち切り（無進捗検知）。遅くても進んでいる大容量ファイルは打ち切りません。`0` で無効。
 - **エラー確認ダイアログ**: エラースキップ無効時、失敗ファイルごとに **再試行 / スキップ / 終了** を選択。
 - **タイムスタンプ維持**（`shutil.copy2`）。フォルダのタイムスタンプは全ファイル処理後に再適用。
 - **ベリファイ**: なし / サイズ+更新日時 / SHA-256 ハッシュ。
@@ -181,7 +181,7 @@ python skipferry.py
 | 隠し/システム属性を維持 | コピー先へ元の隠し/システム属性を再適用（Windows）。既定オフ。 |
 | 先頭スキップ件数 | 処理順で先頭 N 件を飛ばす（破損ファイル対策）。 |
 | ファイルごとのウェイト（ミリ秒） | 各ファイル後に待機を挟み負荷を軽減。`0` で無効。 |
-| リード タイムアウト（秒） | 読み取りが固まるファイルを、コピー子プロセスを kill して N 秒で打ち切る。`0` で無効。 |
+| リード タイムアウト（秒） | コピーの進捗（コピー先のサイズ増加）が N 秒止まったら固まったとみなし、コピー子プロセスを kill して打ち切る。遅くても進んでいる大容量ファイルは打ち切らない。`0` で無効。 |
 
 ### 無視リスト
 
@@ -192,7 +192,7 @@ python skipferry.py
 ### 破損／固まるファイルへの対処
 
 - **原因ファイルが分かる場合**: 先頭スキップ件数でその手前まで飛ばす（処理順は決定論的）。
-- **分からない場合**: リード タイムアウトを設定すると、止まったファイルを N 秒で kill してスキップ。タイムアウトはエラー扱いなので、自動無視を有効にしておけば次回実行では自動でスキップされます。
+- **分からない場合**: リード タイムアウトを設定すると、コピーの進捗が N 秒止まったファイルを kill してスキップ。（コピー先の増加を監視するので、遅いだけの大容量ファイルを hang と誤認しません。）タイムアウトはエラー扱いなので、自動無視を有効にしておけば次回実行では自動でスキップされます。
 - ログは各ファイルの開始行をコピー前に出し、結果が判明するまで改行しないため、固まった場合は原因ファイルがログ最終行に残ります。
 
 ## 注意・制限
