@@ -29,6 +29,7 @@ On top of that it offers recursive copy/move, timestamp preservation, verificati
 - **Move**: copy → verify → delete source (never `os.rename`), so cross-drive moves and verification both work. Deletion can go to the Recycle Bin.
 - **Error skip**: keep going when a single file fails.
 - **Auto-ignore on error**: add errored files to the ignore list, so a re-run skips them automatically.
+- **Preserve hidden/system attributes** (Windows, optional): re-apply the source's hidden/system attributes to the copy (`shutil.copy2` does not carry them). Off by default.
 - **Ignore list**: one file-mask per line (`fnmatch`); import/export as text.
 - **Per-file wait** (ms) to ease OS/application load.
 - **Pause / resume / stop**, all cooperative and responsive.
@@ -70,6 +71,7 @@ The app starts and works even without the optional packages above.
 | Verify | none / size + mtime / SHA-256 hash. |
 | Error skip | Continue when a single file fails. When off, a Retry / Skip / Abort dialog appears. |
 | Auto-ignore on error | Add the failing file to the ignore list automatically. |
+| Preserve hidden/system attributes | Re-apply the source's hidden/system attributes to the copy (Windows). Off by default. |
 | Skip first N | Skip the first N files in processing order (corrupt-file workaround). |
 | Wait per file (ms) | Insert a delay after each file to reduce load. `0` = off. |
 | Read timeout (sec) | Abort files whose read hangs after N seconds, by killing the copy child process. `0` = off. |
@@ -88,7 +90,7 @@ The app starts and works even without the optional packages above.
 
 ## Notes & limitations
 
-- File attributes, ACLs, and alternate data streams (ADS) are not touched — system defaults apply (by design).
+- File attributes, ACLs, and alternate data streams (ADS) are not touched by default — system defaults apply (by design). The optional "Preserve hidden/system attributes" reapplies only the hidden/system flags on Windows; read-only is already preserved by `shutil.copy2`.
 - On move, a source folder that still contains files (due to errors / ignore / skip-N) is not removed; only empty folders are cleaned up, deepest first.
 - Copying into a destination that is inside or equal to the source is refused.
 - On Windows, a process stuck in an uninterruptible kernel I/O wait may not release instantly on `terminate()`; the copy child is a daemon and does not block app exit.
@@ -132,6 +134,7 @@ MIT License — see [LICENSE](LICENSE).
 - **移動**: 「コピー→検証→元削除」で実装（`os.rename` は使わない）。別ドライブ移動と検証を両立。削除はごみ箱送りも選択可。
 - **エラースキップ**: 1 件失敗しても続行。
 - **エラー時自動無視登録**: 失敗ファイルを無視リストへ自動追加し、再実行時に自動でスキップ。
+- **隠し/システム属性を維持**（Windows・任意）: コピー先へ元の隠し/システム属性を再適用（`shutil.copy2` はこれらを引き継がない）。既定はオフ。
 - **無視リスト**: 1 行 1 件のファイルマスク（`fnmatch`）。テキストで入出力可。
 - **ファイルごとのウェイト（ミリ秒）**: OS/アプリの負荷軽減。
 - **一時停止 / 再開 / 停止**（すべて協調的で即応）。
@@ -173,6 +176,7 @@ python skipferry.py
 | ベリファイ | なし / サイズ+更新日時 / SHA-256 ハッシュ。 |
 | エラースキップ | 1 件失敗しても続行。無効時は再試行/スキップ/終了ダイアログを表示。 |
 | エラー時自動無視登録 | 失敗ファイルを無視リストへ自動追加。 |
+| 隠し/システム属性を維持 | コピー先へ元の隠し/システム属性を再適用（Windows）。既定オフ。 |
 | 先頭スキップ件数 | 処理順で先頭 N 件を飛ばす（破損ファイル対策）。 |
 | ファイルごとのウェイト（ミリ秒） | 各ファイル後に待機を挟み負荷を軽減。`0` で無効。 |
 | リード タイムアウト（秒） | 読み取りが固まるファイルを、コピー子プロセスを kill して N 秒で打ち切る。`0` で無効。 |
@@ -191,7 +195,7 @@ python skipferry.py
 
 ## 注意・制限
 
-- ファイル属性・ACL・副次ストリーム（ADS）は操作しません。システムデフォルトに従います（要件）。
+- ファイル属性・ACL・副次ストリーム（ADS）は既定では操作しません。システムデフォルトに従います（要件）。任意の「隠し/システム属性を維持」を有効にした時のみ、Windows で隠し/システム属性を再適用します（読み取り専用は `shutil.copy2` が元々維持）。
 - 移動時、エラー/無視/先頭スキップで元にファイルが残ったフォルダは削除しません。空フォルダのみ深い階層から削除します。
 - コピー先がコピー元の内部/同一の場合は中止します。
 - Windows では、カーネル I/O 待ちに入ったプロセスは `terminate()` が即座に効かない場合があります。コピー子プロセスは daemon なのでアプリ終了は妨げません。

@@ -86,6 +86,7 @@ TRANSLATIONS = {
         "rb_verify_hash": "SHA-256 ハッシュ",
         "chk_skip_error": "エラースキップ (1件失敗しても続行)",
         "chk_auto_ignore": "エラーファイルを自動で無視リストへ登録",
+        "chk_preserve_attrs": "隠し/システム属性を維持 (Windows)",
         "lbl_skip_n": "処理順で先頭からスキップする件数:",
         "lbl_skip_n_note": "(固まる破損ファイル回避用)",
         "lbl_wait": "ファイルごとのウェイト(ミリ秒):",
@@ -170,6 +171,7 @@ TRANSLATIONS = {
         "set_verify": "ベリファイ: {v}",
         "set_skip_error": "エラースキップ: {v}",
         "set_auto_ignore": "エラー時自動無視登録: {v}",
+        "set_preserve_attrs": "隠し/システム属性の維持: {v}",
         "set_skip_n": "先頭スキップ件数: {v}",
         "set_wait": "ファイルごとのウェイト: {v} ミリ秒",
         "set_read_timeout": "リード タイムアウト: {v} 秒",
@@ -256,6 +258,7 @@ TRANSLATIONS = {
         "rb_verify_hash": "SHA-256 hash",
         "chk_skip_error": "Skip errors (continue on failure)",
         "chk_auto_ignore": "Auto-add error files to the ignore list",
+        "chk_preserve_attrs": "Preserve hidden/system attributes (Windows)",
         "lbl_skip_n": "Number of leading files to skip (in processing order):",
         "lbl_skip_n_note": "(to avoid hang-inducing corrupt files)",
         "lbl_wait": "Wait per file (ms):",
@@ -342,6 +345,7 @@ TRANSLATIONS = {
         "set_verify": "Verify: {v}",
         "set_skip_error": "Skip errors: {v}",
         "set_auto_ignore": "Auto-ignore on error: {v}",
+        "set_preserve_attrs": "Preserve hidden/system attrs: {v}",
         "set_skip_n": "Leading skip count: {v}",
         "set_wait": "Wait per file: {v} ms",
         "set_read_timeout": "Read timeout: {v} sec",
@@ -480,6 +484,41 @@ def send_to_recycle_bin(path):
         _recycle_via_winapi(path)
     else:
         raise RuntimeError(t("err_need_send2trash"))
+
+
+# ---------------------------------------------------------------------------
+# 隠し/システム属性の維持 (Windows 専用。オプションが有効なときだけ使う)
+# ---------------------------------------------------------------------------
+_FILE_ATTRIBUTE_HIDDEN = 0x2
+_FILE_ATTRIBUTE_SYSTEM = 0x4
+_HIDDEN_SYSTEM_MASK = _FILE_ATTRIBUTE_HIDDEN | _FILE_ATTRIBUTE_SYSTEM
+
+
+def preserve_hidden_system_attrs(src, dst):
+    """src の 隠し/システム 属性を dst へ反映する (Windows 専用)。
+    shutil.copy2 はこれらを引き継がないため、コピー後に補う用途。
+    圧縮/暗号化/リパースなど他の属性には触れない。失敗は無視 (処理本体を止めない)。"""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.windll.kernel32
+        k.GetFileAttributesW.argtypes = [wintypes.LPCWSTR]
+        k.GetFileAttributesW.restype = wintypes.DWORD
+        k.SetFileAttributesW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD]
+        k.SetFileAttributesW.restype = wintypes.BOOL
+        INVALID = 0xFFFFFFFF
+        sa = k.GetFileAttributesW(str(src))
+        da = k.GetFileAttributesW(str(dst))
+        if sa == INVALID or da == INVALID:
+            return
+        # dst の 隠し/システム ビットを src のそれに合わせる (他ビットは保持)
+        new = (da & ~_HIDDEN_SYSTEM_MASK) | (sa & _HIDDEN_SYSTEM_MASK)
+        if new != da:
+            k.SetFileAttributesW(str(dst), new)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -902,6 +941,7 @@ class CopyMoveWorker(threading.Thread):
                          v=self.tr(verify_map.get(cfg["verify"], "rb_verify_none"))))
         self.log(self.tr("set_skip_error", v=on_off(cfg["skip_error"])))
         self.log(self.tr("set_auto_ignore", v=on_off(cfg["auto_ignore_on_error"])))
+        self.log(self.tr("set_preserve_attrs", v=on_off(cfg.get("preserve_attrs"))))
         self.log(self.tr("set_skip_n", v=max(0, int(cfg.get("skip_first_n", 0) or 0))))
         self.log(self.tr("set_wait", v=max(0, int(cfg.get("wait_ms", 0) or 0))))
         self.log(self.tr("set_read_timeout",
@@ -990,6 +1030,11 @@ class CopyMoveWorker(threading.Thread):
                         ok, detail = self._verify(src_file, dst_file, cfg["verify"])
                         if not ok:
                             raise IOError(self.tr("err_verify_fail", detail=detail))
+
+                    # 隠し/システム属性を維持 (任意, Windows)。元がまだ在るこの時点で
+                    # 反映する (移動時はこの後に元を削除するため)。
+                    if cfg.get("preserve_attrs"):
+                        preserve_hidden_system_attrs(src_file, dst_file)
 
                     # コピー成功を同じ行へ追記。移動時は元削除を別記録として分ける。
                     if is_move:
@@ -1103,6 +1148,9 @@ class CopyMoveWorker(threading.Thread):
             if os.path.isdir(src_dir) and os.path.isdir(dst_dir):
                 st = os.stat(src_dir)
                 os.utime(dst_dir, (st.st_atime, st.st_mtime))
+                # 隠し/システム属性を維持 (任意, Windows)
+                if self.cfg.get("preserve_attrs"):
+                    preserve_hidden_system_attrs(src_dir, dst_dir)
         except Exception as e:
             self.log(self.tr("warn_dir_time_fail", rel=rel_dir, e=e), "warn")
 
@@ -1161,6 +1209,7 @@ class App(_BaseTk):
         self.var_verify = tk.StringVar(value="size_time")
         self.var_skip_error = tk.BooleanVar(value=True)
         self.var_auto_ignore = tk.BooleanVar(value=True)
+        self.var_preserve_attrs = tk.BooleanVar(value=False)
         self.var_skip_n = tk.IntVar(value=0)
         self.var_wait_ms = tk.IntVar(value=0)
         self.var_read_timeout = tk.IntVar(value=0)
@@ -1221,6 +1270,7 @@ class App(_BaseTk):
                             else "size_time")
         self.var_skip_error.set(b("skip_error", True))
         self.var_auto_ignore.set(b("auto_ignore_on_error", True))
+        self.var_preserve_attrs.set(b("preserve_attrs", False))
         self.var_skip_n.set(i("skip_first_n", 0))
         self.var_wait_ms.set(i("wait_ms", 0))
         self.var_read_timeout.set(i("read_timeout_s", 0))
@@ -1252,6 +1302,7 @@ class App(_BaseTk):
             "verify": self.var_verify.get(),
             "skip_error": str(self.var_skip_error.get()),
             "auto_ignore_on_error": str(self.var_auto_ignore.get()),
+            "preserve_attrs": str(self.var_preserve_attrs.get()),
             "skip_first_n": str(self._var_int(self.var_skip_n)),
             "wait_ms": str(self._var_int(self.var_wait_ms)),
             "read_timeout_s": str(self._var_int(self.var_read_timeout)),
@@ -1391,6 +1442,11 @@ class App(_BaseTk):
             row=5, column=2, sticky="w", **pad)
         ttk.Label(frm_opt, text=t("lbl_read_timeout_note")).grid(
             row=5, column=3, sticky="w", **pad)
+
+        # 隠し/システム属性を維持 (Windows)
+        ttk.Checkbutton(frm_opt, text=t("chk_preserve_attrs"),
+                        variable=self.var_preserve_attrs).grid(
+            row=6, column=1, columnspan=3, sticky="w", **pad)
 
         # 無視リスト
         frm_ig = ttk.LabelFrame(self, text=t("frame_ignore"))
@@ -1634,6 +1690,7 @@ class App(_BaseTk):
             "verify": self.var_verify.get(),
             "skip_error": self.var_skip_error.get(),
             "auto_ignore_on_error": self.var_auto_ignore.get(),
+            "preserve_attrs": self.var_preserve_attrs.get(),
             "skip_first_n": max(0, int(self.var_skip_n.get() or 0)),
             "wait_ms": max(0, int(self.var_wait_ms.get() or 0)),
             "read_timeout_s": max(0, int(self.var_read_timeout.get() or 0)),
