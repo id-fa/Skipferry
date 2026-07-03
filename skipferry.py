@@ -1919,11 +1919,16 @@ class App(_BaseTk):
 
         frm = ttk.Frame(dlg)
         frm.pack(fill="both", expand=True, padx=12, pady=4)
+        # 長いパスでもファイル名まで見えるよう、縦・横両方のスクロールバーを出す
         txt = tk.Text(frm, height=14, wrap="none")
-        txt.pack(side="left", fill="both", expand=True)
-        psb = ttk.Scrollbar(frm, command=txt.yview)
-        psb.pack(side="left", fill="y")
-        txt.config(yscrollcommand=psb.set)
+        psb = ttk.Scrollbar(frm, orient="vertical", command=txt.yview)
+        hsb = ttk.Scrollbar(frm, orient="horizontal", command=txt.xview)
+        txt.config(yscrollcommand=psb.set, xscrollcommand=hsb.set)
+        txt.grid(row=0, column=0, sticky="nsew")
+        psb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        frm.rowconfigure(0, weight=1)
+        frm.columnconfigure(0, weight=1)
 
         preview = plan["file_list"][:PREVIEW_N]
         if not preview:
