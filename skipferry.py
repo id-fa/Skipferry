@@ -51,6 +51,11 @@ except Exception:
     _BaseTk = tk.Tk
 
 
+# エラースキップ有効時、このファイル数だけエラーが連続したらドライブ (ルート)
+# にアクセスできるか確認し、取得できなければドライブ接続消失とみなして中止する。
+DRIVE_LOST_ERROR_THRESHOLD = 10
+
+
 # ---------------------------------------------------------------------------
 # 国際化 (i18n) — 日本語 / 英語
 # ---------------------------------------------------------------------------
@@ -193,6 +198,7 @@ TRANSLATIONS = {
         "log_auto_ignore": "  [自動無視登録] {pat}",
         "log_skip_error_off": "エラースキップが無効のため中止します。",
         "log_retrying": "  [再試行] {rel}",
+        "log_drive_lost": "エラーが {n} 件連続しました。ドライブ ({root}) にアクセスできません。ドライブ接続が消失したとみなして中止します。",
         "log_aborted_by_user": "ユーザーが「終了」を選択しました。中止します。",
         # ---- エラー確認ダイアログ (エラースキップ無効時) ----
         "dlg_error_title": "エラー — 処理を中断中",
@@ -367,6 +373,7 @@ TRANSLATIONS = {
         "log_auto_ignore": "  [auto-ignored] {pat}",
         "log_skip_error_off": "Error-skip is off, so aborting.",
         "log_retrying": "  [Retry] {rel}",
+        "log_drive_lost": "{n} errors in a row. Cannot access drive ({root}). Assuming the drive was disconnected and aborting.",
         "log_aborted_by_user": "User chose \"Abort\". Stopping.",
         # ---- Error dialog (when error-skip is off) ----
         "dlg_error_title": "Error — processing paused",
@@ -1007,6 +1014,9 @@ class CopyMoveWorker(threading.Thread):
         done = 0
         error_count = 0
         ok_count = 0
+        # エラースキップ有効時、連続してスキップしたエラー数 (成功でリセット)。
+        # しきい値に達したらドライブ接続の消失を確認する。
+        consecutive_errors = 0
         # 元に残ったファイルがあるフォルダを追跡 (移動時のフォルダ削除判定用)
         dirs_with_残 = set()
 
@@ -1066,6 +1076,7 @@ class CopyMoveWorker(threading.Thread):
                         self.log_append(self.tr("log_item_copied"))
 
                     ok_count += 1
+                    consecutive_errors = 0  # 成功したので連続エラーをリセット
                     break  # 成功 → 再試行ループを抜けて次のファイルへ
 
                 except _Stopped:
@@ -1100,6 +1111,20 @@ class CopyMoveWorker(threading.Thread):
                     # 移動時、元が残るフォルダを記録 (親も含む)
                     if is_move:
                         self._mark_残(os.path.dirname(rel), dirs_with_残)
+                    # エラースキップ有効時、エラーが一定数連続したらドライブ (ルート)
+                    # にアクセスできるか確認し、取れなければ接続消失とみなして中止する。
+                    if cfg["skip_error"] and action == "skip":
+                        consecutive_errors += 1
+                        if consecutive_errors >= DRIVE_LOST_ERROR_THRESHOLD:
+                            root = self._drive_root(src_root)
+                            if not self._drive_accessible(root):
+                                self.log(self.tr("log_drive_lost",
+                                                 n=consecutive_errors, root=root),
+                                         "error")
+                                aborted = True
+                                break
+                            # アクセスできたので再度連続エラーを数え直す
+                            consecutive_errors = 0
                     if action == "abort":
                         self.log(self.tr("log_aborted_by_user"), "error")
                         aborted = True
@@ -1157,6 +1182,21 @@ class CopyMoveWorker(threading.Thread):
             if parent == rel_dir:
                 break
             rel_dir = parent
+
+    def _drive_root(self, path):
+        """path が属するドライブのルート (例 'D:\\') を返す。
+        ドライブ文字が無い環境ではファイルシステムのルートを返す。"""
+        drive, _ = os.path.splitdrive(os.path.abspath(path))
+        return (drive + os.sep) if drive else os.path.abspath(os.sep)
+
+    def _drive_accessible(self, root):
+        """ドライブ (ルート) にアクセスしてファイル一覧が取得できるか確認する。
+        取得できればドライブは生きているとみなす。"""
+        try:
+            os.listdir(root)
+            return True
+        except OSError:
+            return False
 
     def _apply_dir_time(self, src_base, dst_base, rel_dir, src_override=None):
         try:
