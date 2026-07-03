@@ -35,6 +35,7 @@ import time
 import datetime
 import traceback
 import configparser
+import multiprocessing
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -89,6 +90,8 @@ TRANSLATIONS = {
         "lbl_skip_n_note": "(固まる破損ファイル回避用)",
         "lbl_wait": "ファイルごとのウェイト(ミリ秒):",
         "lbl_wait_note": "(0で無効 / OSが重くなる時に増やす)",
+        "lbl_read_timeout": "リード タイムアウト(秒):",
+        "lbl_read_timeout_note": "(0で無効 / 固まる破損ファイルを指定秒で打ち切り)",
         # ---- 無視リスト ----
         "frame_ignore": "無視リスト (ファイルマスク: *.tmp, thumbs.db, sub/*.log 等 / 1行1件)",
         "btn_import": "インポート",
@@ -169,6 +172,7 @@ TRANSLATIONS = {
         "set_auto_ignore": "エラー時自動無視登録: {v}",
         "set_skip_n": "先頭スキップ件数: {v}",
         "set_wait": "ファイルごとのウェイト: {v} ミリ秒",
+        "set_read_timeout": "リード タイムアウト: {v} 秒",
         "set_ignore_count": "無視パターン数: {v}",
         "set_logfile": "ログファイル: {v}",
         # ---- ワーカー / 処理ログ ----
@@ -182,9 +186,20 @@ TRANSLATIONS = {
         "log_item_removed": " [元ファイル削除]",
         "log_item_recycled": " [元ファイルをゴミ箱へ]",
         "err_verify_fail": "ベリファイ失敗: {detail}",
+        "err_read_timeout": "リード タイムアウト ({sec}秒) により打ち切り",
         "log_item_err": " [エラー] {e}",
         "log_auto_ignore": "  [自動無視登録] {pat}",
         "log_skip_error_off": "エラースキップが無効のため中止します。",
+        "log_retrying": "  [再試行] {rel}",
+        "log_aborted_by_user": "ユーザーが「終了」を選択しました。中止します。",
+        # ---- エラー確認ダイアログ (エラースキップ無効時) ----
+        "dlg_error_title": "エラー — 処理を中断中",
+        "dlg_error_msg": "ファイルの処理でエラーが発生しました。どうしますか？",
+        "dlg_error_file": "ファイル: {rel}",
+        "dlg_error_detail": "エラー: {err}",
+        "dlg_btn_retry": "再試行",
+        "dlg_btn_skip": "スキップ",
+        "dlg_btn_abort": "終了",
         "log_stopped": "ユーザーにより停止されました。",
         "log_applying_dir_time": "フォルダのタイムスタンプを適用中...",
         "log_removing_empty": "移動元の空フォルダを削除中...",
@@ -245,6 +260,8 @@ TRANSLATIONS = {
         "lbl_skip_n_note": "(to avoid hang-inducing corrupt files)",
         "lbl_wait": "Wait per file (ms):",
         "lbl_wait_note": "(0 = off / increase if the OS slows down)",
+        "lbl_read_timeout": "Read timeout (sec):",
+        "lbl_read_timeout_note": "(0 = off / abort hang-inducing files after N sec)",
         # ---- Ignore list ----
         "frame_ignore": "Ignore list (file masks: *.tmp, thumbs.db, sub/*.log, etc. / one per line)",
         "btn_import": "Import",
@@ -327,6 +344,7 @@ TRANSLATIONS = {
         "set_auto_ignore": "Auto-ignore on error: {v}",
         "set_skip_n": "Leading skip count: {v}",
         "set_wait": "Wait per file: {v} ms",
+        "set_read_timeout": "Read timeout: {v} sec",
         "set_ignore_count": "Ignore patterns: {v}",
         "set_logfile": "Log file: {v}",
         # ---- Worker / processing log ----
@@ -340,9 +358,20 @@ TRANSLATIONS = {
         "log_item_removed": " [source deleted]",
         "log_item_recycled": " [source to Recycle Bin]",
         "err_verify_fail": "Verification failed: {detail}",
+        "err_read_timeout": "Aborted by read timeout ({sec}s)",
         "log_item_err": " [error] {e}",
         "log_auto_ignore": "  [auto-ignored] {pat}",
         "log_skip_error_off": "Error-skip is off, so aborting.",
+        "log_retrying": "  [Retry] {rel}",
+        "log_aborted_by_user": "User chose \"Abort\". Stopping.",
+        # ---- Error dialog (when error-skip is off) ----
+        "dlg_error_title": "Error — processing paused",
+        "dlg_error_msg": "An error occurred while processing a file. What do you want to do?",
+        "dlg_error_file": "File: {rel}",
+        "dlg_error_detail": "Error: {err}",
+        "dlg_btn_retry": "Retry",
+        "dlg_btn_skip": "Skip",
+        "dlg_btn_abort": "Abort",
         "log_stopped": "Stopped by the user.",
         "log_applying_dir_time": "Applying folder timestamps...",
         "log_removing_empty": "Removing empty source folders...",
@@ -613,6 +642,35 @@ def plan_operation(cfg):
     return plan
 
 
+class _Stopped(Exception):
+    """リード タイムアウト待機中に停止要求が来たことを示す内部例外。"""
+
+
+def _copy_worker_main(in_q, out_q):
+    """リード タイムアウト用の子プロセス本体。
+
+    親から (src, dst) を受け取り `shutil.copy2` を実行して結果を返すだけの
+    ループ。破損ファイルの read で固まった場合はこのプロセスごと親から
+    terminate される (スレッドは kill できないが、プロセスは kill できる)。
+    None を受け取ったら正常終了する。
+    ベリファイ (ハッシュ再読込) は copy 成功後 = 元が読めた後なので親スレッド側に
+    残す (二重の hang リスクは実質無いため、ここでは copy のみ担当する)。
+    """
+    while True:
+        try:
+            task = in_q.get()
+        except (EOFError, OSError):
+            return
+        if task is None:
+            return
+        src, dst = task
+        try:
+            shutil.copy2(src, dst)
+            out_q.put((True, ""))
+        except Exception as e:  # 破損以外のエラーもメッセージにして親へ返す
+            out_q.put((False, f"{type(e).__name__}: {e}"))
+
+
 # ---------------------------------------------------------------------------
 # ワーカー (別スレッドで実行)
 # ---------------------------------------------------------------------------
@@ -625,6 +683,14 @@ class CopyMoveWorker(threading.Thread):
         self.stop_flag = threading.Event()
         self.pause_flag = threading.Event()  # set=一時停止中
         self.logf = None  # ログファイルのハンドル (任意)
+        # リード タイムアウト用の常駐子プロセス (timeout>0 のときだけ生成し、
+        # hang して kill したら次回に再生成する)
+        self._copy_proc = None
+        self._copy_in = None
+        self._copy_out = None
+        # エラースキップ無効時のエラー確認ダイアログとの協調 (GUI スレッドが応答を書く)
+        self.error_event = threading.Event()   # GUI が選択したら set
+        self.error_response = None             # "retry" | "skip" | "abort"
 
     def tr(self, key, **kwargs):
         """開始時に固定した言語で翻訳する (実行中に切替えてもログはぶれない)。"""
@@ -689,6 +755,101 @@ class CopyMoveWorker(threading.Thread):
             time.sleep(min(step, remaining))
             remaining -= step
 
+    # -- リード タイムアウト用の子プロセス管理 --
+    def _ensure_copy_proc(self):
+        """コピー用の子プロセスが生きていることを保証する (無ければ生成)。"""
+        if self._copy_proc is not None and self._copy_proc.is_alive():
+            return
+        self._copy_in = multiprocessing.Queue()
+        self._copy_out = multiprocessing.Queue()
+        self._copy_proc = multiprocessing.Process(
+            target=_copy_worker_main, args=(self._copy_in, self._copy_out),
+            daemon=True)
+        self._copy_proc.start()
+
+    def _kill_copy_proc(self):
+        """子プロセスを強制終了する (hang 時)。キューも破棄し次回に作り直す。"""
+        p = self._copy_proc
+        self._copy_proc = None
+        self._copy_in = None
+        self._copy_out = None
+        if p is None:
+            return
+        try:
+            p.terminate()
+        except Exception:
+            pass
+        try:
+            p.join(timeout=2.0)
+        except Exception:
+            pass
+
+    def _shutdown_copy_proc(self):
+        """処理終了時に子プロセスを後始末する (正常終了を試み、駄目なら kill)。"""
+        p = self._copy_proc
+        if p is None:
+            return
+        try:
+            if self._copy_in is not None:
+                self._copy_in.put(None)  # 正常終了の合図
+        except Exception:
+            pass
+        try:
+            p.join(timeout=1.0)
+        except Exception:
+            pass
+        if p.is_alive():
+            self._kill_copy_proc()
+        else:
+            self._copy_proc = None
+            self._copy_in = None
+            self._copy_out = None
+
+    @staticmethod
+    def _remove_partial(path):
+        """タイムアウトで途中まで書かれたコピー先ファイルを掃除する。"""
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass  # 消せなくても処理本体は止めない
+
+    def _copy_with_timeout(self, src, dst, timeout_s):
+        """子プロセスで copy2 を実行し、timeout_s 秒以内に終わらなければ
+        プロセスごと kill して TimeoutError を送出する。停止要求が来たら
+        _Stopped を送出する。停止/タイムアウトの応答性のため 0.1 秒刻みで待つ。"""
+        self._ensure_copy_proc()
+        self._copy_in.put((src, dst))
+        steps = max(1, int(round(timeout_s / 0.1)))
+        for _ in range(steps):
+            if self.stop_flag.is_set():
+                self._kill_copy_proc()
+                raise _Stopped()
+            try:
+                ok, msg = self._copy_out.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if ok:
+                return
+            raise IOError(msg)  # 破損以外のコピー失敗 (通常のエラー扱い)
+        # 時間切れ: 子プロセスごと kill し、途中まで書かれた dst を掃除する
+        self._kill_copy_proc()
+        self._remove_partial(dst)
+        raise TimeoutError(self.tr("err_read_timeout", sec=timeout_s))
+
+    def _ask_error_action(self, rel, err_text):
+        """エラースキップ無効時、GUI にエラー確認ダイアログを依頼して応答を待つ。
+        戻り値: "retry"=再試行 / "skip"=このファイルを飛ばす / "abort"=終了。
+        GUI が無い/停止要求時は "abort" とみなす (0.1 秒刻みで停止に応答)。"""
+        self.error_event.clear()
+        self.error_response = None
+        self.q.put(("ask_error", (rel, err_text)))
+        while not self.error_event.is_set():
+            if self.stop_flag.is_set():
+                return "abort"
+            time.sleep(0.1)
+        return self.error_response or "abort"
+
     def run(self):
         # ログファイル出力が指定されていれば開く
         log_path = self.cfg.get("log_file")
@@ -707,6 +868,7 @@ class CopyMoveWorker(threading.Thread):
         except Exception:
             self.log(self.tr("log_fatal", tb=traceback.format_exc()), "error")
         finally:
+            self._shutdown_copy_proc()  # リード タイムアウト用の子プロセスを後始末
             if self.logf is not None:
                 try:
                     self.logf.write(self.tr("logf_end") + "\n")
@@ -742,6 +904,8 @@ class CopyMoveWorker(threading.Thread):
         self.log(self.tr("set_auto_ignore", v=on_off(cfg["auto_ignore_on_error"])))
         self.log(self.tr("set_skip_n", v=max(0, int(cfg.get("skip_first_n", 0) or 0))))
         self.log(self.tr("set_wait", v=max(0, int(cfg.get("wait_ms", 0) or 0))))
+        self.log(self.tr("set_read_timeout",
+                         v=max(0, int(cfg.get("read_timeout_s", 0) or 0))))
         ig_count = len([p for p in cfg.get("ignore_patterns", [])
                         if p.strip() and not p.strip().startswith("#")])
         self.log(self.tr("set_ignore_count", v=ig_count))
@@ -765,6 +929,8 @@ class CopyMoveWorker(threading.Thread):
         file_list = plan["file_list"]
         dir_list = plan["dir_list"]
         is_move = cfg["mode"] == "move"
+        # リード タイムアウト (秒)。0 なら従来どおりスレッド内で直接コピーする。
+        timeout_s = max(0, int(cfg.get("read_timeout_s", 0) or 0))
 
         for rel in plan["ignored_list"]:
             self.log(self.tr("log_ignored", rel=rel))
@@ -801,54 +967,84 @@ class CopyMoveWorker(threading.Thread):
             src_file = os.path.join(src_root, rel)
             dst_file = os.path.join(dst_root, rel)
 
-            try:
-                # 処理開始行は改行しない (完了/エラーを同じ行の末尾へ追記する)。
-                # 固まった場合もログ最終行が原因ファイルを指す (主目的)。
-                self.log(self.tr("log_item", done=done, total=total, rel=rel),
-                         newline=False)
-                os.makedirs(os.path.dirname(dst_file), exist_ok=True)
+            # 1 ファイルを処理する。エラースキップ無効時はダイアログの選択で
+            # 再試行できるよう、この単位を再試行ループで囲む。
+            aborted = False
+            while True:
+                try:
+                    # 処理開始行は改行しない (完了/エラーを同じ行の末尾へ追記する)。
+                    # 固まった場合もログ最終行が原因ファイルを指す (主目的)。
+                    self.log(self.tr("log_item", done=done, total=total, rel=rel),
+                             newline=False)
+                    os.makedirs(os.path.dirname(dst_file), exist_ok=True)
 
-                # コピー (メタデータ=タイムスタンプ維持)
-                shutil.copy2(src_file, dst_file)
-
-                # ベリファイ
-                if cfg["verify"] != "none":
-                    ok, detail = self._verify(src_file, dst_file, cfg["verify"])
-                    if not ok:
-                        raise IOError(self.tr("err_verify_fail", detail=detail))
-
-                # コピー成功を同じ行へ追記。移動時は元削除を別記録として分ける。
-                if is_move:
-                    self.log_append(self.tr("log_item_copied"), newline=False)
-                    if cfg["move_to_recycle"]:
-                        send_to_recycle_bin(src_file)
-                        self.log_append(self.tr("log_item_recycled"))
+                    # コピー (メタデータ=タイムスタンプ維持)。リード タイムアウトが
+                    # 有効なら子プロセスで実行し、固まったら kill して打ち切る。
+                    if timeout_s > 0:
+                        self._copy_with_timeout(src_file, dst_file, timeout_s)
                     else:
-                        os.remove(src_file)
-                        self.log_append(self.tr("log_item_removed"))
-                else:
-                    self.log_append(self.tr("log_item_copied"))
+                        shutil.copy2(src_file, dst_file)
 
-                ok_count += 1
+                    # ベリファイ
+                    if cfg["verify"] != "none":
+                        ok, detail = self._verify(src_file, dst_file, cfg["verify"])
+                        if not ok:
+                            raise IOError(self.tr("err_verify_fail", detail=detail))
 
-            except Exception as e:
-                error_count += 1
-                # 開いている処理開始行の末尾へエラーを追記して行を閉じる
-                self.log_append(self.tr("log_item_err", e=e), "error")
+                    # コピー成功を同じ行へ追記。移動時は元削除を別記録として分ける。
+                    if is_move:
+                        self.log_append(self.tr("log_item_copied"), newline=False)
+                        if cfg["move_to_recycle"]:
+                            send_to_recycle_bin(src_file)
+                            self.log_append(self.tr("log_item_recycled"))
+                        else:
+                            os.remove(src_file)
+                            self.log_append(self.tr("log_item_removed"))
+                    else:
+                        self.log_append(self.tr("log_item_copied"))
 
-                # エラーファイルを自動で無視リストへ登録
-                if cfg["auto_ignore_on_error"]:
-                    pat = rel.replace("\\", "/")
-                    self.ignore_add(pat)
-                    self.log(self.tr("log_auto_ignore", pat=pat), "warn")
+                    ok_count += 1
+                    break  # 成功 → 再試行ループを抜けて次のファイルへ
 
-                # 移動時、元が残るフォルダを記録 (親も含む)
-                if is_move:
-                    self._mark_残(os.path.dirname(rel), dirs_with_残)
-
-                if not cfg["skip_error"]:
-                    self.log(self.tr("log_skip_error_off"), "error")
+                except _Stopped:
+                    # リード タイムアウト待機中に停止要求。開いている行を閉じて終了。
+                    self.log_append("", newline=True)
+                    self.log(self.tr("log_stopped"), "warn")
+                    aborted = True
                     break
+
+                except Exception as e:
+                    # 開いている処理開始行の末尾へエラーを追記して行を閉じる
+                    self.log_append(self.tr("log_item_err", e=e), "error")
+
+                    # エラースキップ有効なら従来どおり即スキップ。無効なら
+                    # 確認ダイアログで 再試行/スキップ/終了 を選ばせる。
+                    if cfg["skip_error"]:
+                        action = "skip"
+                    else:
+                        action = self._ask_error_action(rel, str(e))
+
+                    if action == "retry":
+                        self.log(self.tr("log_retrying", rel=rel), "warn")
+                        continue  # 同じファイルを最初からやり直す (log_item も出し直す)
+
+                    # skip / abort = このファイルは運べないことが確定
+                    error_count += 1
+                    # エラーファイルを自動で無視リストへ登録
+                    if cfg["auto_ignore_on_error"]:
+                        pat = rel.replace("\\", "/")
+                        self.ignore_add(pat)
+                        self.log(self.tr("log_auto_ignore", pat=pat), "warn")
+                    # 移動時、元が残るフォルダを記録 (親も含む)
+                    if is_move:
+                        self._mark_残(os.path.dirname(rel), dirs_with_残)
+                    if action == "abort":
+                        self.log(self.tr("log_aborted_by_user"), "error")
+                        aborted = True
+                    break
+
+            if aborted:
+                break
 
             # OS/アプリを重くしないためのウェイト
             self._throttle_sleep()
@@ -967,6 +1163,7 @@ class App(_BaseTk):
         self.var_auto_ignore = tk.BooleanVar(value=True)
         self.var_skip_n = tk.IntVar(value=0)
         self.var_wait_ms = tk.IntVar(value=0)
+        self.var_read_timeout = tk.IntVar(value=0)
         self.var_logfile = tk.BooleanVar(value=False)
         self.var_log_path = tk.StringVar()
 
@@ -1026,6 +1223,7 @@ class App(_BaseTk):
         self.var_auto_ignore.set(b("auto_ignore_on_error", True))
         self.var_skip_n.set(i("skip_first_n", 0))
         self.var_wait_ms.set(i("wait_ms", 0))
+        self.var_read_timeout.set(i("read_timeout_s", 0))
         self.var_logfile.set(b("logfile", False))
         self.var_log_path.set(s("log_path"))
 
@@ -1056,6 +1254,7 @@ class App(_BaseTk):
             "auto_ignore_on_error": str(self.var_auto_ignore.get()),
             "skip_first_n": str(self._var_int(self.var_skip_n)),
             "wait_ms": str(self._var_int(self.var_wait_ms)),
+            "read_timeout_s": str(self._var_int(self.var_read_timeout)),
             "logfile": str(self.var_logfile.get()),
             "log_path": self.var_log_path.get(),
         }
@@ -1183,6 +1382,15 @@ class App(_BaseTk):
             row=4, column=2, sticky="w", **pad)
         ttk.Label(frm_opt, text=t("lbl_wait_note")).grid(
             row=4, column=3, sticky="w", **pad)
+
+        # リード タイムアウト (固まる破損ファイルを指定秒で打ち切る)
+        ttk.Label(frm_opt, text=t("lbl_read_timeout")).grid(
+            row=5, column=0, columnspan=2, sticky="e", **pad)
+        ttk.Spinbox(frm_opt, from_=0, to=3600, increment=1,
+                    textvariable=self.var_read_timeout, width=10).grid(
+            row=5, column=2, sticky="w", **pad)
+        ttk.Label(frm_opt, text=t("lbl_read_timeout_note")).grid(
+            row=5, column=3, sticky="w", **pad)
 
         # 無視リスト
         frm_ig = ttk.LabelFrame(self, text=t("frame_ignore"))
@@ -1321,15 +1529,16 @@ class App(_BaseTk):
             self.var_log_path.set(os.path.normpath(path))
             self.var_logfile.set(True)
 
-    def _resolve_log_file(self, dst):
+    def _resolve_log_file(self):
         """ログファイル出力が有効なら出力先パスを決める。無効なら None。
-        空欄時はコピー先の隣に日時入りファイル名で自動生成する。"""
+        空欄時はプログラム(ini と同じ = _config_path のフォルダ)に日時入りの
+        ファイル名で自動生成する。"""
         if not self.var_logfile.get():
             return None
         path = self.var_log_path.get().strip()
         if not path:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            base = os.path.dirname(os.path.abspath(dst)) if dst else os.getcwd()
+            base = os.path.dirname(_config_path())  # プログラム(ini)と同じフォルダ
             if not os.path.isdir(base):
                 base = os.getcwd()
             path = os.path.join(base, f"skipferry_log_{ts}.txt")
@@ -1427,8 +1636,9 @@ class App(_BaseTk):
             "auto_ignore_on_error": self.var_auto_ignore.get(),
             "skip_first_n": max(0, int(self.var_skip_n.get() or 0)),
             "wait_ms": max(0, int(self.var_wait_ms.get() or 0)),
+            "read_timeout_s": max(0, int(self.var_read_timeout.get() or 0)),
             "ignore_patterns": self._get_ignore_patterns(),
-            "log_file": self._resolve_log_file(dst),
+            "log_file": self._resolve_log_file(),
             "lang": CURRENT_LANG,
         }
 
@@ -1470,6 +1680,60 @@ class App(_BaseTk):
             self.worker.pause_flag.set()
             self.btn_pause.config(text=t("btn_resume"))
             self._log("warn", t("log_pause_requested"))
+
+    # ---- エラー確認ダイアログ (エラースキップ無効時) ----
+    def _show_error_dialog(self, rel, err_text):
+        """エラーになったファイルについて 再試行/スキップ/終了 を選ばせる
+        モーダルダイアログ。戻り値は "retry" / "skip" / "abort"。
+        ×で閉じた場合は "abort" (安全側)。GUI スレッドから呼ぶこと。"""
+        dlg = tk.Toplevel(self)
+        dlg.title(t("dlg_error_title"))
+        dlg.transient(self)
+        dlg.resizable(False, False)
+        result = {"action": "abort"}
+
+        frm = ttk.Frame(dlg, padding=14)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=t("dlg_error_msg")).pack(anchor="w")
+        ttk.Label(frm, text=t("dlg_error_file", rel=rel),
+                  wraplength=520, justify="left").pack(anchor="w", pady=(8, 0))
+        ttk.Label(frm, text=t("dlg_error_detail", err=err_text),
+                  wraplength=520, justify="left", foreground="#b00020").pack(
+            anchor="w", pady=(2, 12))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+
+        def choose(action):
+            result["action"] = action
+            dlg.destroy()
+
+        # 既定 (Enter/フォーカス) は再試行。ボタンは 再試行 / スキップ / 終了 の順。
+        btn_retry = ttk.Button(btns, text=t("dlg_btn_retry"),
+                               command=lambda: choose("retry"))
+        btn_retry.pack(side="left", padx=(0, 6))
+        ttk.Button(btns, text=t("dlg_btn_skip"),
+                   command=lambda: choose("skip")).pack(side="left", padx=6)
+        ttk.Button(btns, text=t("dlg_btn_abort"),
+                   command=lambda: choose("abort")).pack(side="left", padx=6)
+
+        dlg.protocol("WM_DELETE_WINDOW", lambda: choose("abort"))
+        dlg.bind("<Return>", lambda e: choose("retry"))
+        dlg.bind("<Escape>", lambda e: choose("skip"))
+        dlg.grab_set()
+
+        # 親の中央あたりへ配置してからフォーカス
+        dlg.update_idletasks()
+        try:
+            px, py = self.winfo_rootx(), self.winfo_rooty()
+            pw, ph = self.winfo_width(), self.winfo_height()
+            w, h = dlg.winfo_width(), dlg.winfo_height()
+            dlg.geometry(f"+{px + max(0, (pw - w) // 2)}+{py + max(0, (ph - h) // 2)}")
+        except Exception:
+            pass
+        btn_retry.focus_set()
+        self.wait_window(dlg)  # モーダルに待つ
+        return result["action"]
 
     # ---- 実行前プレビュー ----
     def _show_preview(self, cfg, plan):
@@ -1555,6 +1819,14 @@ class App(_BaseTk):
                     self.lbl_prog.config(text=f"{done} / {total}")
                 elif kind == "ignore_add":
                     self._append_ignore_pattern(payload)
+                elif kind == "ask_error":
+                    # エラースキップ無効時のエラー確認。ダイアログの選択を
+                    # ワーカーへ返す (event で協調)。
+                    rel, err_text = payload
+                    action = self._show_error_dialog(rel, err_text)
+                    if self.worker is not None:
+                        self.worker.error_response = action
+                        self.worker.error_event.set()
                 elif kind == "done":
                     self.btn_run.config(state="normal")
                     self.btn_stop.config(state="disabled")
@@ -1570,4 +1842,7 @@ class App(_BaseTk):
 
 
 if __name__ == "__main__":
+    # フリーズ (PyInstaller 等) 時に子プロセスが GUI を再起動しないための保護。
+    # リード タイムアウト機能が multiprocessing を使うため必須。
+    multiprocessing.freeze_support()
     App().mainloop()

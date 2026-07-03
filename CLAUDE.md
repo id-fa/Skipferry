@@ -57,10 +57,26 @@ python skipferry.py
 - **ワーカー (`CopyMoveWorker`, threading.Thread)** — 実際のコピー/移動/検証/削除を実行。
   一覧作成は `plan_operation` に委譲。結果は `queue.Queue` へ
   `("log"|"progress"|"ignore_add"|"done", payload)` 形式で送る。
+- **リード タイムアウト (`read_timeout_s`, 子プロセス+kill)** — 読み取りで固まる破損ファイル
+  対策の主目的をより直接的に満たす機能。`cfg["read_timeout_s"]`（秒, 0=無効）が正の時のみ、
+  コピーをモジュール関数 `_copy_worker_main` を実行する**常駐子プロセス**（`multiprocessing`）へ
+  逃がし、指定秒内に戻らなければ**プロセスごと kill**して打ち切る（Python はスレッドを kill
+  できないが、プロセスは kill できるため）。子プロセスは hang して kill した時のみ再生成する
+  （`_ensure_copy_proc`/`_kill_copy_proc`/`_shutdown_copy_proc`）ので通常時のオーバーヘッドは
+  起動1回のみ。0 の時は従来どおりスレッド内で `shutil.copy2` を直接呼ぶ（オーバーヘッド無し）。
+  待機は 0.1 秒刻みで停止要求に即応（`_copy_with_timeout`）。**タイムアウトは `TimeoutError`
+  としてエラー扱い**にして既存の自動無視/エラースキップ経路へ載せる（破損ファイルとして次回
+  自動スキップされる＝主目的に合致）。停止要求が待機中に来た場合は内部例外 `_Stopped` を送出し、
+  本処理ループが行を閉じて中断する。タイムアウトで途中まで書かれた dst は `_remove_partial` で掃除。
+  **ベリファイ（ハッシュ再読込）は copy 成功後＝元が読めた後なのでスレッド側に残す**（子プロセスは
+  copy のみ担当）。子プロセスは `run()` の finally で必ず後始末する。**Windows の spawn 対策**として
+  GUI は `__main__` ガード下に置き（子で GUI を再起動しない）、frozen ビルド用に `__main__` 冒頭で
+  `multiprocessing.freeze_support()` を呼ぶ。
 - **ログファイル出力** — `cfg["log_file"]` にパスがあれば `run()` が追記(`a`)モードで開き、
   `self.log()` が GUI へ送るのと同時に時刻付きでファイルへも書く(逐次 flush)。開始/終了に
   区切り行を出す。書き込み失敗は処理本体を止めない。GUI 側は `_resolve_log_file` で
-  パスを決定（空欄ならコピー先の隣に `skipferry_log_<日時>.txt` を自動生成）。
+  パスを決定（空欄ならプログラム（`_config_path` = ini と同じフォルダ）に
+  `skipferry_log_<日時>.txt` を自動生成）。
   加えて現在のログ欄を任意保存する `_save_log`（実行不要でいつでも可）も持つ。
 - **設定の永続化 (ini)** — `_start` で実行確定時（プレビュー承認後）と、ウィンドウを閉じる時
   （`_on_close` / `WM_DELETE_WINDOW`）に `_save_settings` が現在の設定を
@@ -92,6 +108,17 @@ python skipferry.py
   ログ・進捗バー・無視リスト追加を反映。停止は `worker.stop_flag`(Event)、一時停止は
   `worker.pause_flag`(Event) で協調的に行う。
   **ワーカースレッドから Tkinter ウィジェットを直接操作しないこと**（キュー経由必須）。
+- **エラー確認ダイアログ (エラースキップ無効時の 再試行/スキップ/終了)** — `skip_error` が
+  無効のときにファイル処理でエラーが出ると、ワーカーはキューへ `("ask_error", (rel, err))` を
+  送り `error_event`(Event) で GUI の応答を待つ（`_ask_error_action`, 0.1 秒刻みで停止に応答）。
+  GUI 側 `_poll_queue` は `_show_error_dialog` でモーダル Toplevel（再試行/スキップ/終了、
+  ×＝終了）を出し、選択を `worker.error_response`＋`error_event.set()` で返す。
+  本処理はファイル単位を**再試行ループ**（`while True`）で囲み、`retry`=同じファイルをやり直し
+  （`log_item` から出し直す）、`skip`=当該だけ飛ばして継続（エラー計上・自動無視・移動時の
+  残フォルダ記録は skip/abort 確定時のみ）、`abort`=中断。**エラースキップ有効時は従来どおり
+  ダイアログ無しで即スキップ継続**（内部的に `action="skip"` 相当）。再試行で成功した場合は
+  エラー計上も自動無視もしない。**再試行/スキップの確定処理はループ内の同一分岐に集約**し、
+  失敗のたびに二重計上しないこと。
 - **一時停止/再開・ウェイト** — いずれもワーカー内でフラグを見て協調的に待機する。
   一時停止は `pause_flag`。ワーカーは各ファイル処理**前**に `_wait_if_paused` を呼び、
   一時停止中は 0.1 秒刻みで待機する（停止要求が来れば即座に抜ける）。GUI 側の
