@@ -93,6 +93,7 @@ The app starts and works even without the optional packages above.
 ## Notes & limitations
 
 - File attributes, ACLs, and alternate data streams (ADS) are not touched by default — system defaults apply (by design). The optional "Preserve hidden/system attributes" reapplies only the hidden/system flags on Windows; read-only is already preserved by `shutil.copy2`.
+- **Alternate data streams (ADS), including `Zone.Identifier` (Mark of the Web), are NOT carried over.** Copying uses `shutil.copy2`, which only copies the main data stream, timestamps, and mode bits — every ADS is dropped. In practice this means files downloaded from the internet lose their MOTW at the destination (they become "unblocked"), and any custom `:stream:$DATA` data is lost. This is not covered by "Preserve hidden/system attributes" (that option only reapplies the hidden/system flags). If you need ADS preserved, do not use this tool for that transfer.
 - On move, a source folder that still contains files (due to errors / ignore / skip-N) is not removed; only empty folders are cleaned up, deepest first.
 - Copying into a destination that is inside or equal to the source is refused.
 - On Windows, a process stuck in an uninterruptible kernel I/O wait may not release instantly on `terminate()`; the copy child is a daemon and does not block app exit.
@@ -198,6 +199,7 @@ python skipferry.py
 ## 注意・制限
 
 - ファイル属性・ACL・副次ストリーム（ADS）は既定では操作しません。システムデフォルトに従います（要件）。任意の「隠し/システム属性を維持」を有効にした時のみ、Windows で隠し/システム属性を再適用します（読み取り専用は `shutil.copy2` が元々維持）。
+- **副次ストリーム（ADS）は `Zone.Identifier`（Mark of the Web）を含めコピー先へ引き継がれず、消えます。** コピーは `shutil.copy2` で行うため、主ストリーム・タイムスタンプ・モードビットのみが運ばれ、ADS はすべて失われます。実際上は、ネットからダウンロードしたファイルはコピー先で MOTW が外れた（＝ブロック解除された）状態になり、カスタムの `:ストリーム名:$DATA` データも失われます。これは「隠し/システム属性を維持」オプションでは補われません（同オプションは隠し/システム属性のみ再適用）。ADS の保持が必要な転送には本ツールを使わないでください。
 - 移動時、エラー/無視/先頭スキップで元にファイルが残ったフォルダは削除しません。空フォルダのみ深い階層から削除します。
 - コピー先がコピー元の内部/同一の場合は中止します。
 - Windows では、カーネル I/O 待ちに入ったプロセスは `terminate()` が即座に効かない場合があります。コピー子プロセスは daemon なのでアプリ終了は妨げません。
