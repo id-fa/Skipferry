@@ -98,6 +98,8 @@ TRANSLATIONS = {
         "lbl_wait_note": "(0で無効 / OSが重くなる時に増やす)",
         "lbl_read_timeout": "リード タイムアウト(秒):",
         "lbl_read_timeout_note": "(0で無効 / 進捗が指定秒止まったら固まったと判断し打ち切り)",
+        "lbl_error_wait": "エラースキップ時のウェイト(秒):",
+        "lbl_error_wait_note": "(0で無効 / エラーをスキップした後この秒数だけ待ってから再開)",
         # ---- 無視リスト ----
         "frame_ignore": "無視リスト (ファイルマスク: *.tmp, thumbs.db, sub/*.log 等 / 1行1件)",
         "btn_import": "インポート",
@@ -180,6 +182,7 @@ TRANSLATIONS = {
         "set_skip_n": "先頭スキップ件数: {v}",
         "set_wait": "ファイルごとのウェイト: {v} ミリ秒",
         "set_read_timeout": "リード タイムアウト: {v} 秒",
+        "set_error_wait": "エラースキップ時のウェイト: {v} 秒",
         "set_ignore_count": "無視パターン数: {v}",
         "set_logfile": "ログファイル: {v}",
         # ---- ワーカー / 処理ログ ----
@@ -198,6 +201,7 @@ TRANSLATIONS = {
         "log_auto_ignore": "  [自動無視登録] {pat}",
         "log_skip_error_off": "エラースキップが無効のため中止します。",
         "log_retrying": "  [再試行] {rel}",
+        "log_error_waiting": "  [エラー後ウェイト] {sec} 秒待機してから再開します。",
         "log_drive_lost": "エラーが {n} 件連続しました。ドライブ ({root}) にアクセスできません。ドライブ接続が消失したとみなして中止します。",
         "log_aborted_by_user": "ユーザーが「終了」を選択しました。中止します。",
         # ---- エラー確認ダイアログ (エラースキップ無効時) ----
@@ -271,6 +275,8 @@ TRANSLATIONS = {
         "lbl_wait_note": "(0 = off / increase if the OS slows down)",
         "lbl_read_timeout": "Read timeout (sec):",
         "lbl_read_timeout_note": "(0 = off / abort when no progress for N sec)",
+        "lbl_error_wait": "Wait after skipped error (sec):",
+        "lbl_error_wait_note": "(0 = off / wait this many sec after skipping an error before resuming)",
         # ---- Ignore list ----
         "frame_ignore": "Ignore list (file masks: *.tmp, thumbs.db, sub/*.log, etc. / one per line)",
         "btn_import": "Import",
@@ -355,6 +361,7 @@ TRANSLATIONS = {
         "set_skip_n": "Leading skip count: {v}",
         "set_wait": "Wait per file: {v} ms",
         "set_read_timeout": "Read timeout: {v} sec",
+        "set_error_wait": "Wait after skipped error: {v} sec",
         "set_ignore_count": "Ignore patterns: {v}",
         "set_logfile": "Log file: {v}",
         # ---- Worker / processing log ----
@@ -373,6 +380,7 @@ TRANSLATIONS = {
         "log_auto_ignore": "  [auto-ignored] {pat}",
         "log_skip_error_off": "Error-skip is off, so aborting.",
         "log_retrying": "  [Retry] {rel}",
+        "log_error_waiting": "  [wait after error] Waiting {sec} sec before resuming.",
         "log_drive_lost": "{n} errors in a row. Cannot access drive ({root}). Assuming the drive was disconnected and aborting.",
         "log_aborted_by_user": "User chose \"Abort\". Stopping.",
         # ---- Error dialog (when error-skip is off) ----
@@ -791,7 +799,19 @@ class CopyMoveWorker(threading.Thread):
         ms = max(0, int(self.cfg.get("wait_ms", 0) or 0))
         if ms <= 0:
             return
-        remaining = ms / 1000.0
+        self._interruptible_sleep(ms / 1000.0)
+
+    def _error_wait_sleep(self):
+        """エラースキップ後、再開前に挟むウェイト（秒）。停止/一時停止に応答する。"""
+        sec = max(0, int(self.cfg.get("error_wait_s", 0) or 0))
+        if sec <= 0:
+            return
+        self.log(self.tr("log_error_waiting", sec=sec), "warn")
+        self._interruptible_sleep(float(sec))
+
+    def _interruptible_sleep(self, seconds):
+        """指定秒だけ 0.1 秒刻みで待機する。停止/一時停止に即応する。"""
+        remaining = seconds
         step = 0.1
         while remaining > 0 and not self.stop_flag.is_set():
             # ウェイト中に一時停止された場合はそちらで待機する
@@ -970,6 +990,8 @@ class CopyMoveWorker(threading.Thread):
         self.log(self.tr("set_wait", v=max(0, int(cfg.get("wait_ms", 0) or 0))))
         self.log(self.tr("set_read_timeout",
                          v=max(0, int(cfg.get("read_timeout_s", 0) or 0))))
+        self.log(self.tr("set_error_wait",
+                         v=max(0, int(cfg.get("error_wait_s", 0) or 0))))
         ig_count = len([p for p in cfg.get("ignore_patterns", [])
                         if p.strip() and not p.strip().startswith("#")])
         self.log(self.tr("set_ignore_count", v=ig_count))
@@ -1125,6 +1147,9 @@ class CopyMoveWorker(threading.Thread):
                                 break
                             # アクセスできたので再度連続エラーを数え直す
                             consecutive_errors = 0
+                        # エラースキップ有効時は、次のファイルへ進む前に任意のウェイトを
+                        # 挟む（ドライブ復旧待ち・負荷軽減用）。停止/一時停止に即応する。
+                        self._error_wait_sleep()
                     if action == "abort":
                         self.log(self.tr("log_aborted_by_user"), "error")
                         aborted = True
@@ -1270,6 +1295,7 @@ class App(_BaseTk):
         self.var_skip_n = tk.IntVar(value=0)
         self.var_wait_ms = tk.IntVar(value=0)
         self.var_read_timeout = tk.IntVar(value=0)
+        self.var_error_wait = tk.IntVar(value=0)
         self.var_logfile = tk.BooleanVar(value=False)
         self.var_log_path = tk.StringVar()
 
@@ -1331,6 +1357,7 @@ class App(_BaseTk):
         self.var_skip_n.set(i("skip_first_n", 0))
         self.var_wait_ms.set(i("wait_ms", 0))
         self.var_read_timeout.set(i("read_timeout_s", 0))
+        self.var_error_wait.set(i("error_wait_s", 0))
         self.var_logfile.set(b("logfile", False))
         self.var_log_path.set(s("log_path"))
 
@@ -1363,6 +1390,7 @@ class App(_BaseTk):
             "skip_first_n": str(self._var_int(self.var_skip_n)),
             "wait_ms": str(self._var_int(self.var_wait_ms)),
             "read_timeout_s": str(self._var_int(self.var_read_timeout)),
+            "error_wait_s": str(self._var_int(self.var_error_wait)),
             "logfile": str(self.var_logfile.get()),
             "log_path": self.var_log_path.get(),
         }
@@ -1500,10 +1528,19 @@ class App(_BaseTk):
         ttk.Label(frm_opt, text=t("lbl_read_timeout_note")).grid(
             row=5, column=3, sticky="w", **pad)
 
+        # エラースキップ時のウェイト (秒 / エラーをスキップした後 再開前に待つ)
+        ttk.Label(frm_opt, text=t("lbl_error_wait")).grid(
+            row=6, column=0, columnspan=2, sticky="e", **pad)
+        ttk.Spinbox(frm_opt, from_=0, to=999, increment=1,
+                    textvariable=self.var_error_wait, width=10).grid(
+            row=6, column=2, sticky="w", **pad)
+        ttk.Label(frm_opt, text=t("lbl_error_wait_note")).grid(
+            row=6, column=3, sticky="w", **pad)
+
         # 隠し/システム属性を維持 (Windows)
         ttk.Checkbutton(frm_opt, text=t("chk_preserve_attrs"),
                         variable=self.var_preserve_attrs).grid(
-            row=6, column=1, columnspan=3, sticky="w", **pad)
+            row=7, column=1, columnspan=3, sticky="w", **pad)
 
         # 無視リスト
         frm_ig = ttk.LabelFrame(self, text=t("frame_ignore"))
@@ -1751,6 +1788,7 @@ class App(_BaseTk):
             "skip_first_n": max(0, int(self.var_skip_n.get() or 0)),
             "wait_ms": max(0, int(self.var_wait_ms.get() or 0)),
             "read_timeout_s": max(0, int(self.var_read_timeout.get() or 0)),
+            "error_wait_s": max(0, min(999, int(self.var_error_wait.get() or 0))),
             "ignore_patterns": self._get_ignore_patterns(),
             "log_file": self._resolve_log_file(),
             "lang": CURRENT_LANG,
