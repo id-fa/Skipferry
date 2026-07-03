@@ -102,7 +102,7 @@ TRANSLATIONS = {
         "frame_logfile": "ログファイル出力",
         "chk_logfile": "処理ログをファイルに出力する",
         "lbl_logout": "出力先:",
-        "lbl_logout_note": "(空欄なら実行時にコピー先の隣へ自動生成)",
+        "lbl_logout_note": "(空欄なら実行時にプログラムと同じフォルダへ自動生成)",
         # ---- 実行 / 進捗 ----
         "btn_run": "実行",
         "btn_pause": "一時停止",
@@ -274,7 +274,7 @@ TRANSLATIONS = {
         "frame_logfile": "Log file output",
         "chk_logfile": "Write the processing log to a file",
         "lbl_logout": "Output:",
-        "lbl_logout_note": "(if blank, auto-created next to the destination at run time)",
+        "lbl_logout_note": "(if blank, auto-created in the program folder at run time)",
         # ---- Run / progress ----
         "btn_run": "Run",
         "btn_pause": "Pause",
