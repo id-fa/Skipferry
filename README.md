@@ -6,6 +6,8 @@ A Python/Tkinter GUI tool for copying and moving folders, built primarily to sur
 
 The name is a blend of skip (skip over corrupt files) + ferry (carry the healthy files across safely).
 
+![Screenshot](docs/screenshot.webp)
+
 ---
 
 ## Why Skipferry?
