@@ -51,6 +51,10 @@ except Exception:
     _BaseTk = tk.Tk
 
 
+# アプリのバージョン (タイトルバー表示用)。
+APP_VERSION = "v1.14"
+
+
 # エラースキップ有効時、このファイル数だけエラーが連続したらドライブ (ルート)
 # にアクセスできるか確認し、取得できなければドライブ接続消失とみなして中止する。
 DRIVE_LOST_ERROR_THRESHOLD = 10
@@ -1438,7 +1442,7 @@ class App(_BaseTk):
 
     # ---- UI 構築 ----
     def _build_ui(self):
-        self.title(t("app_title"))
+        self.title("{}  {}".format(t("app_title"), APP_VERSION))
         pad = {"padx": 6, "pady": 3}
 
         # 言語切替
